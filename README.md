@@ -1,5 +1,7 @@
 # @snoutdata/client
 
+Part of [snoutdata/snoutdata](https://github.com/snoutdata/snoutdata), where the docs and examples live.
+
 The JavaScript client for SnoutData Cloud. One project's data API, auth, storage, realtime
 and Snout Functions, from its URL and one key. No dependencies; runs in every browser and
 in Node 22+.
