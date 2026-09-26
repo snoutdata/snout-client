@@ -9,7 +9,15 @@
 
 import { joinUrl, messageOf, readBody, type Transport } from './http.js';
 
-export type Row = Record<string, unknown>;
+/**
+ * A row when the client was made without a `Database` type: `any`, exactly as
+ * supabase-js has them, so an app written against supabase-js moves over by changing its import
+ * and nothing else. It was `Record<string, unknown>` in 0.1.0-0.2.0, and moving our own four apps
+ * across found ~100 places that stopped compiling on that alone. With a `Database` type
+ * (`snoutdata gen types typescript`), rows are exact, which is where the safety belongs.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type Row = any;
 
 export interface QueryError {
 	message: string;
@@ -77,7 +85,11 @@ export type FilterOperator =
  * type where they change the shape (`single()`, `maybeSingle()`), so the awaited value is
  * typed by what was asked for.
  */
-export class QueryBuilder<T> implements PromiseLike<QueryResult<T>> {
+/**
+ * `W` is the row a `select()` after a write returns: the table's row for `insert`, `update`,
+ * `upsert` and `delete`, whose own result is `null` until `select()` asks for the rows.
+ */
+export class QueryBuilder<T, W = T extends readonly (infer E)[] ? E : T> implements PromiseLike<QueryResult<T>> {
 	protected readonly state: State;
 
 	constructor(state: State) {
@@ -228,7 +240,7 @@ export class QueryBuilder<T> implements PromiseLike<QueryResult<T>> {
 	 * After `insert`/`update`/`upsert`/`delete`, return the affected rows (and only these
 	 * columns). Without it a write returns no rows, which is cheaper.
 	 */
-	select<R = T extends readonly (infer E)[] ? E : T>(columns = '*'): QueryBuilder<R[]> {
+	select<R = W>(columns = '*'): QueryBuilder<R[]> {
 		this.state.url.searchParams.set('select', cleanColumns(columns));
 		this.state.prefer.set('return', 'representation');
 		return this as unknown as QueryBuilder<R[]>;
@@ -412,8 +424,8 @@ export class TableBuilder<R> {
 		private readonly schema: string | undefined
 	) {}
 
-	private start<T>(method: Method, body?: unknown): QueryBuilder<T> {
-		return new QueryBuilder<T>({
+	private start<T>(method: Method, body?: unknown): QueryBuilder<T, R> {
+		return new QueryBuilder<T, R>({
 			transport: this.transport,
 			method,
 			url: new URL(this.url),
@@ -438,7 +450,7 @@ export class TableBuilder<R> {
 	}
 
 	/** One row or many. Returns nothing unless followed by `.select()`. */
-	insert(values: Partial<R> | readonly Partial<R>[], options: WriteOptions & { defaultToNull?: boolean } = {}): QueryBuilder<null> {
+	insert(values: Partial<R> | readonly Partial<R>[], options: WriteOptions & { defaultToNull?: boolean } = {}): QueryBuilder<null, R> {
 		const builder = this.start<null>('POST', values);
 		withCount(builder, options.count);
 		if (Array.isArray(values)) {
@@ -457,7 +469,7 @@ export class TableBuilder<R> {
 	upsert(
 		values: Partial<R> | readonly Partial<R>[],
 		options: WriteOptions & { onConflict?: string; ignoreDuplicates?: boolean; defaultToNull?: boolean } = {}
-	): QueryBuilder<null> {
+	): QueryBuilder<null, R> {
 		const builder = this.start<null>('POST', values);
 		builder['state'].prefer.set('resolution', options.ignoreDuplicates ? 'ignore-duplicates' : 'merge-duplicates');
 		if (options.onConflict) {
@@ -474,14 +486,14 @@ export class TableBuilder<R> {
 	}
 
 	/** Change the rows the filters that follow select. Without a filter, PostgREST refuses. */
-	update(values: Partial<R>, options: WriteOptions = {}): QueryBuilder<null> {
+	update(values: Partial<R>, options: WriteOptions = {}): QueryBuilder<null, R> {
 		const builder = this.start<null>('PATCH', values);
 		withCount(builder, options.count);
 		return builder;
 	}
 
 	/** Remove the rows the filters that follow select. */
-	delete(options: WriteOptions = {}): QueryBuilder<null> {
+	delete(options: WriteOptions = {}): QueryBuilder<null, R> {
 		const builder = this.start<null>('DELETE');
 		withCount(builder, options.count);
 		return builder;

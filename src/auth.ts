@@ -766,6 +766,15 @@ export class AuthClient {
 	}
 }
 
+/** What `admin.generateLink` returns beside the user, named as supabase-js names it. */
+export interface GenerateLinkProperties {
+	action_link: string;
+	email_otp: string;
+	hashed_token: string;
+	redirect_to: string;
+	verification_type: string;
+}
+
 /** Account management with the service key. Never ship that key to a browser. */
 export class AuthAdmin {
 	constructor(private readonly auth: AuthClient) {}
@@ -825,7 +834,7 @@ export class AuthAdmin {
 		password?: string;
 		newEmail?: string;
 		options?: { data?: Record<string, unknown>; redirectTo?: string };
-	}): Promise<AuthResult<{ properties: Record<string, unknown>; user: User }>> {
+	}): Promise<AuthResult<{ properties: GenerateLinkProperties; user: User }>> {
 		const { options, newEmail, ...rest } = params;
 		const { body, error } = await this.auth.call('admin/generate_link', {
 			body: { ...rest, new_email: newEmail, data: options?.data, redirect_to: options?.redirectTo }
@@ -835,7 +844,7 @@ export class AuthAdmin {
 		}
 		const { action_link, email_otp, hashed_token, redirect_to, verification_type, ...user } = body;
 		return {
-			data: { properties: { action_link, email_otp, hashed_token, redirect_to, verification_type }, user: user as unknown as User },
+			data: { properties: { action_link, email_otp, hashed_token, redirect_to, verification_type } as GenerateLinkProperties, user: user as unknown as User },
 			error: null
 		};
 	}

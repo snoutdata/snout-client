@@ -129,3 +129,21 @@ test('or, not, contains and text search encode as PostgREST expects', () => {
 	assert.equal(url.searchParams.get('tags'), 'cs.{x,y}');
 	assert.equal(url.searchParams.get('body'), 'wfts(english).cat & dog');
 });
+
+// These two are about TYPES, so what they assert is that this file compiles: an app written
+// against supabase-js moves over by changing its import (untyped rows are `any`, as there), and a
+// write followed by select() gives the table's rows, never `null`.
+test('untyped rows read like supabase-js, and insert().select() returns rows, not null', async () => {
+	const { db } = client(() => ({ body: [{ id: 7, name: 'ada' }] }));
+	const read = await db.from('people').select('id, name');
+	const names: string[] = (read.data ?? []).map((row: { name: string }) => row.name);
+	assert.deepEqual(names, ['ada']);
+
+	interface Db {
+		public: { Tables: { people: { Row: { id: number; name: string } } } };
+	}
+	const typed = createClient<Db>(URL_, 'anon-key', { global: { fetch: fakeFetch(() => ({ body: { id: 7, name: 'ada' } })).fetch }, auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
+	const { data } = await typed.from('people').insert({ name: 'ada' }).select().single();
+	const id: number | undefined = data?.id;
+	assert.equal(id, 7);
+});
