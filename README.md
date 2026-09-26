@@ -37,4 +37,5 @@ bash apps/cloud/compat/compat.sh --yes --ref <ref> --client snoutdata
 
 ## Licence
 
-MIT. See [LICENSE](./LICENSE).
+Apache-2.0. See [LICENSE](./LICENSE) and [NOTICE](./NOTICE). Version 0.1.0 was published under MIT
+and stays MIT for anyone who has it; later versions are Apache-2.0.
