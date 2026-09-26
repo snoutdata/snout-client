@@ -20,6 +20,7 @@ import { rpc, TableBuilder, type CountMethod, type QueryBuilder, type Row } from
 import { StorageClient } from './storage.js';
 
 export * from './auth.js';
+export * from './cookies.js';
 export * from './functions.js';
 export * from './realtime.js';
 export * from './rest.js';
@@ -92,7 +93,7 @@ export class SnoutClient<DB = Database, S extends string = 'public'> {
 		this.schemaName = options.db?.schema;
 
 		const fetchImpl: Fetch = options.global?.fetch ?? ((...args) => fetch(...args));
-		const globalHeaders = { 'X-Client-Info': 'snoutdata-js/0.1.0', ...options.global?.headers };
+		const globalHeaders = { 'X-Client-Info': 'snoutdata-js/0.2.0', ...options.global?.headers };
 		const ref = new URL(base).hostname.split('.')[0];
 		this.auth = new AuthClient(this.authUrl, key, fetchImpl, globalHeaders, ref, options.auth);
 
