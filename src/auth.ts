@@ -81,6 +81,13 @@ export interface AuthOptions {
 	flowType?: 'pkce' | 'implicit';
 	storage?: SessionStorage;
 	storageKey?: string;
+	/**
+	 * Told what the session did and why: each refresh and its outcome, a session adopted from
+	 * storage because another tab or process refreshed it first, and every sign-out with its
+	 * cause. For a log that has to explain an unexpected sign-out after the fact. No token is
+	 * ever passed to it.
+	 */
+	debug?: (...parts: unknown[]) => void;
 }
 
 type Listener = (event: AuthEvent, session: Session | null) => void;
@@ -109,6 +116,27 @@ async function pkcePair(): Promise<{ verifier: string; challenge: string }> {
 	const verifier = base64Url(crypto.getRandomValues(new Uint8Array(48)));
 	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
 	return { verifier, challenge: base64Url(new Uint8Array(digest)) };
+}
+
+/**
+ * A stored PKCE verifier. Ours is the bare string; supabase-js writes it JSON-encoded, with
+ * `/PASSWORD_RECOVERY` appended for a recovery, so a sign-in that one started and this one
+ * finishes (an app that moved clients mid-redirect) still completes.
+ */
+function readVerifier(stored: string | null): string | null {
+	if (!stored) {
+		return null;
+	}
+	let value = stored;
+	if (value.startsWith('"')) {
+		try {
+			const parsed: unknown = JSON.parse(value);
+			value = typeof parsed === 'string' ? parsed : value;
+		} catch {
+			// not JSON after all: use it as it is
+		}
+	}
+	return value.split('/')[0] || null;
 }
 
 function nowSeconds(): number {
@@ -142,6 +170,11 @@ export class AuthClient {
 	private session: Session | null = null;
 	private refreshing: Promise<Session | null> | null = null;
 	private timer: ReturnType<typeof setTimeout> | undefined;
+	/** Set by stopAutoRefresh and cleared by startAutoRefresh; a sign-in does not re-arm it. */
+	private paused = false;
+	private readonly debug: (...parts: unknown[]) => void;
+	/** A bearer the caller fixed in `global.headers`, used by `getUser()` when nobody is signed in. */
+	private readonly fixedBearer: string | null;
 	private readonly ready: Promise<void>;
 
 	/** The admin half: managing other people's accounts. Needs the service key. */
@@ -159,6 +192,9 @@ export class AuthClient {
 		this.storage =
 			options.storage ?? (this.persist && typeof localStorage !== 'undefined' ? localStorage : memoryStorage());
 		this.storageKey = options.storageKey ?? `snoutdata-${ref}-auth`;
+		this.debug = options.debug ?? (() => undefined);
+		const authorization = Object.entries(headers).find(([name]) => name.toLowerCase() === 'authorization')?.[1];
+		this.fixedBearer = authorization?.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : null;
 		this.admin = new AuthAdmin(this);
 		this.ready = this.initialize(options.detectSessionInUrl ?? browser);
 	}
@@ -200,15 +236,58 @@ export class AuthClient {
 		return { body, error: null };
 	}
 
-	private async initialize(detectInUrl: boolean): Promise<void> {
-		const stored = await this.storage.getItem(this.storageKey);
-		if (stored) {
-			try {
-				this.session = JSON.parse(stored) as Session;
-			} catch {
-				await this.storage.removeItem(this.storageKey);
-			}
+	/** The session as storage holds it now, or null. Unreadable or shapeless contents are cleared. */
+	private async readStored(): Promise<Session | null> {
+		let stored: string | null;
+		try {
+			stored = await this.storage.getItem(this.storageKey);
+		} catch {
+			return this.session;
 		}
+		if (!stored) {
+			return null;
+		}
+		try {
+			const parsed = JSON.parse(stored) as Session;
+			if (typeof parsed?.access_token === 'string' && typeof parsed.refresh_token === 'string' && typeof parsed.expires_at === 'number') {
+				return parsed;
+			}
+		} catch {
+			// fall through to clearing it
+		}
+		await this.storage.removeItem(this.storageKey);
+		return null;
+	}
+
+	/**
+	 * Adopts what storage holds when it is not what this client holds. Storage can be shared: two
+	 * tabs, two origins reading one cookie, two app instances reading one file. Whoever refreshes
+	 * first rotates the refresh token, and a client still holding the old one would present a
+	 * spent token and be signed out, taking the shared store with it. So storage is read before
+	 * the session is used or refreshed, the way supabase-js reads it on every getSession.
+	 */
+	private async syncFromStorage(): Promise<void> {
+		const stored = await this.readStored();
+		const current = this.session;
+		if (stored?.access_token === current?.access_token && stored?.refresh_token === current?.refresh_token) {
+			return;
+		}
+		this.session = stored;
+		this.schedule();
+		if (!stored) {
+			this.debug('session removed from storage elsewhere: signed out');
+			this.emit('SIGNED_OUT');
+		} else if (current && stored.user?.id === current.user?.id) {
+			this.debug('session refreshed elsewhere: adopted from storage');
+			this.emit('TOKEN_REFRESHED');
+		} else {
+			this.debug('session written elsewhere: adopted from storage');
+			this.emit('SIGNED_IN');
+		}
+	}
+
+	private async initialize(detectInUrl: boolean): Promise<void> {
+		this.session = await this.readStored();
 		if (detectInUrl && typeof location !== 'undefined') {
 			await this.fromUrl().catch(() => undefined);
 		}
@@ -279,7 +358,7 @@ export class AuthClient {
 			clearTimeout(this.timer);
 			this.timer = undefined;
 		}
-		if (!this.autoRefresh || !this.session) {
+		if (!this.autoRefresh || this.paused || !this.session) {
 			return;
 		}
 		const due = Math.max(0, (this.session.expires_at - REFRESH_MARGIN - nowSeconds()) * 1000);
@@ -293,13 +372,29 @@ export class AuthClient {
 	private refresh(refreshToken: string): Promise<Session | null> {
 		if (!this.refreshing) {
 			this.refreshing = (async () => {
+				// Refreshing our own session: somebody sharing the store may have done it already.
+				if (refreshToken === this.session?.refresh_token) {
+					await this.syncFromStorage();
+					const current = this.session as Session | null;
+					if (current && current.refresh_token !== refreshToken && current.expires_at - REFRESH_MARGIN > nowSeconds()) {
+						return current;
+					}
+					if (!current) {
+						return null;
+					}
+					refreshToken = current.refresh_token;
+				}
 				const { body, error } = await this.call('token', { query: { grant_type: 'refresh_token' }, body: { refresh_token: refreshToken } });
 				const session = error ? null : toSession(body);
 				if (session) {
+					this.debug('token refreshed');
 					await this.save(session, 'TOKEN_REFRESHED');
 				} else if (error && error.status >= 400 && error.status < 500) {
 					// The refresh token is spent or revoked: the session is over.
+					this.debug(`refresh refused (${error.status} ${error.code ?? ''} ${error.message}): removing the session`);
 					await this.save(null, 'SIGNED_OUT');
+				} else {
+					this.debug(`refresh failed, session kept: ${error?.message ?? 'no session in the answer'}`);
 				}
 				return session;
 			})().finally(() => {
@@ -334,7 +429,8 @@ export class AuthClient {
 	/** The current session, refreshed first if it has expired. Read locally, not verified. */
 	async getSession(): Promise<AuthResult<{ session: Session | null }>> {
 		await this.ready;
-		if (this.session && this.session.expires_at - REFRESH_MARGIN <= nowSeconds()) {
+		await this.syncFromStorage();
+		if (this.session &&this.session.expires_at - REFRESH_MARGIN <= nowSeconds()) {
 			await this.refresh(this.session.refresh_token);
 		}
 		return { data: { session: this.session }, error: null };
@@ -342,7 +438,8 @@ export class AuthClient {
 
 	/** The signed-in user, as the auth server says it is now. Use this, not the session, to decide. */
 	async getUser(jwt?: string): Promise<AuthResult<{ user: User | null }>> {
-		const token = jwt ?? (await this.getSession()).data.session?.access_token;
+		// A server client made to BE a user (`global.headers.Authorization`) asks about that user.
+		const token = jwt ?? (await this.getSession()).data.session?.access_token ?? this.fixedBearer ?? undefined;
 		if (!token) {
 			return { data: { user: null }, error: new AuthError('Auth session missing', 400, 'session_not_found') };
 		}
@@ -503,10 +600,68 @@ export class AuthClient {
 		return { data: { provider: credentials.provider, url: url.toString() }, error: null };
 	}
 
+	/**
+	 * Signs in with an ID token the provider handed the app directly (Google One Tap, Sign in
+	 * with Apple), with no redirect.
+	 */
+	async signInWithIdToken(credentials: {
+		provider: string;
+		token: string;
+		access_token?: string;
+		nonce?: string;
+		options?: { captchaToken?: string };
+	}): Promise<AuthResult<{ user: User | null; session: Session | null }>> {
+		await this.ready;
+		const { provider, token, access_token, nonce, options } = credentials;
+		const { body, error } = await this.call('token', {
+			query: { grant_type: 'id_token' },
+			body: { provider, id_token: token, access_token, nonce, gotrue_meta_security: { captcha_token: options?.captchaToken } }
+		});
+		return this.signedIn(body, error);
+	}
+
+	/**
+	 * The URL that signs in through a SAML identity provider, named by its id or by the email
+	 * domain it is registered for. In a browser it navigates there unless
+	 * `skipBrowserRedirect`; elsewhere it only returns it. The session arrives by the redirect.
+	 */
+	async signInWithSSO(
+		params: ({ providerId: string } | { domain: string }) & { options?: { redirectTo?: string; captchaToken?: string; skipBrowserRedirect?: boolean } }
+	): Promise<AuthResult<{ url: string }>> {
+		await this.ready;
+		const options = params.options ?? {};
+		let challenge: string | undefined;
+		if (this.flowType === 'pkce') {
+			challenge = await this.startPkce();
+		}
+		const { body, error } = await this.call('sso', {
+			body: {
+				...('providerId' in params ? { provider_id: params.providerId } : { domain: params.domain }),
+				redirect_to: options.redirectTo,
+				skip_http_redirect: true,
+				code_challenge: challenge,
+				code_challenge_method: challenge ? 's256' : undefined,
+				...(options.captchaToken ? { gotrue_meta_security: { captcha_token: options.captchaToken } } : {})
+			}
+		});
+		if (error) {
+			await this.storage.removeItem(`${this.storageKey}-code-verifier`);
+			return { data: { url: null }, error };
+		}
+		const url = typeof body.url === 'string' ? body.url : '';
+		if (!url) {
+			return { data: { url: null }, error: new AuthError('The auth server answered SSO with no URL', 500, 'sso_no_url') };
+		}
+		if (isBrowser() && !options.skipBrowserRedirect) {
+			location.assign(url);
+		}
+		return { data: { url }, error: null };
+	}
+
 	/** Finishes a PKCE sign-in with the `code` the redirect carried. */
 	async exchangeCodeForSession(code: string): Promise<AuthResult<{ user: User | null; session: Session | null }>> {
 		const key = `${this.storageKey}-code-verifier`;
-		const verifier = await this.storage.getItem(key);
+		const verifier = readVerifier(await this.storage.getItem(key));
 		if (!verifier) {
 			return { data: { user: null, session: null }, error: new AuthError('No code verifier is stored for this sign-in', 400, 'pkce_verifier_missing') };
 		}
@@ -534,6 +689,7 @@ export class AuthClient {
 			}
 		}
 		if (scope !== 'others') {
+			this.debug(`signed out by the app (scope ${scope})`);
 			await this.save(null, 'SIGNED_OUT');
 		}
 		return { error: null };
@@ -589,12 +745,24 @@ export class AuthClient {
 		return { error };
 	}
 
-	/** Stops the refresh timer. For scripts and tests that want to exit cleanly. */
+	/**
+	 * Stops refreshing the token until `startAutoRefresh`. For scripts that want to exit cleanly,
+	 * and for an app going to sleep, which should not refresh into a network that is not back.
+	 */
 	stopAutoRefresh(): void {
+		this.paused = true;
 		if (this.timer !== undefined) {
 			clearTimeout(this.timer);
 			this.timer = undefined;
 		}
+	}
+
+	/** Resumes refreshing: at once if the token is due, otherwise when it will be. */
+	async startAutoRefresh(): Promise<void> {
+		this.paused = false;
+		await this.ready;
+		await this.syncFromStorage();
+		this.schedule();
 	}
 }
 
