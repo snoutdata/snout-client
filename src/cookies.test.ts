@@ -87,3 +87,22 @@ test('a value from before base64 encoding is returned as it is', () => {
 	cookies.store.set('k', '{"access_token":"a"}');
 	assert.equal(cookieStorage({}, cookies).getItem('k'), '{"access_token":"a"}');
 });
+
+test('a PKCE sign-in round-trips through the cookie store: verifier out, code back, session in', async () => {
+	const { createClient } = await import('./index.js');
+	const { fakeFetch } = await import('./testing.js');
+	const cookies = jar();
+	const { fetch, sent } = fakeFetch((request) =>
+		request.url.includes('/sso')
+			? { body: { url: 'https://idp.example.com/login' } }
+			: { body: { access_token: 'a1', refresh_token: 'r1', token_type: 'bearer', expires_in: 3600, user: { id: 'u1' } } }
+	);
+	const options = { global: { fetch }, auth: { storage: cookieStorage({}, cookies), storageKey: 'sb-accounts-auth-token', autoRefreshToken: false, detectSessionInUrl: false } };
+	await createClient('https://accounts.snoutdata.com', 'anon', options).auth.signInWithSSO({ domain: 'example.com', options: { skipBrowserRedirect: true } });
+	// The page navigates away and comes back: a new client, reading the same cookies.
+	const { data, error } = await createClient('https://accounts.snoutdata.com', 'anon', options).auth.exchangeCodeForSession('code-1');
+	assert.equal(error, null);
+	assert.equal(data.session?.access_token, 'a1');
+	assert.ok((JSON.parse(sent.at(-1)?.body ?? '{}').code_verifier ?? '').length >= 43);
+	assert.equal(cookies.store.has('sb-accounts-auth-token-code-verifier'), false);
+});
