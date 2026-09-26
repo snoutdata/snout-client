@@ -2,7 +2,7 @@
 	"name": "@snoutdata/client",
 	"version": "0.1.0",
 	"description": "The JavaScript client for SnoutData Cloud: the data API, auth, storage, realtime and Snout Functions of one project, from one URL and one key. No dependencies.",
-	"license": "MIT",
+	"license": "Apache-2.0",
 	"author": "SnoutData",
 	"homepage": "https://docs.snoutdata.com/cloud/api",
 	"type": "module",
@@ -20,7 +20,8 @@
 		"!dist/**/*.test.*",
 		"!dist/testing.*",
 		"README.md",
-		"LICENSE"
+		"LICENSE",
+		"NOTICE"
 	],
 	"sideEffects": false,
 	"engines": {
