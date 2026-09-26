@@ -93,7 +93,7 @@ export class SnoutClient<DB = Database, S extends string = 'public'> {
 		this.schemaName = options.db?.schema;
 
 		const fetchImpl: Fetch = options.global?.fetch ?? ((...args) => fetch(...args));
-		const globalHeaders = { 'X-Client-Info': 'snoutdata-js/0.2.1', ...options.global?.headers };
+		const globalHeaders = { 'X-Client-Info': 'snoutdata-js/0.2.2', ...options.global?.headers };
 		const ref = new URL(base).hostname.split('.')[0];
 		this.auth = new AuthClient(this.authUrl, key, fetchImpl, globalHeaders, ref, options.auth);
 

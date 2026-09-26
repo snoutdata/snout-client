@@ -672,7 +672,10 @@ export class AuthClient {
 
 	private async startPkce(): Promise<string> {
 		const { verifier, challenge } = await pkcePair();
-		await this.storage.setItem(`${this.storageKey}-code-verifier`, verifier);
+		// JSON-encoded, as upstream-js stores it. Not a nicety: `cookieStorage` (like ssr's) reads
+		// a value back only if it is JSON, so a bare verifier came back null and every redirect
+		// sign-in through a cookie store failed on return (0.2.0-0.2.1, found live 2026-09-26).
+		await this.storage.setItem(`${this.storageKey}-code-verifier`, JSON.stringify(verifier));
 		return challenge;
 	}
 
