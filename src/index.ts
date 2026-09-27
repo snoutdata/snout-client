@@ -6,7 +6,7 @@
  *     const db = createClient('https://<ref>.api.snoutdata.com', '<anon key>')
  *
  * Every product lives under that one URL at a fixed prefix (`/rest/v1`, `/auth/v1`,
- * `/storage/v1`, `/realtime/v1`, `/functions/v1`). Every request carries the key as
+ * `/storage/v1`, `/realtime/v1`, `/functions/v1`, `/push/v1`). Every request carries the key as
  * `apikey`, and as `Authorization` the signed-in user's access token, or the key itself when
  * nobody is signed in. Row-level security reads that token, which is why the anon key is
  * safe in a browser: it grants what your policies grant the `anon` role, and nothing else.
@@ -16,12 +16,14 @@ import { AuthClient, type AuthOptions } from './auth.js';
 import { FunctionsClient } from './functions.js';
 import { joinUrl, type Fetch, type Transport } from './http.js';
 import { RealtimeClient, type ChannelOptions, type RealtimeChannel, type RealtimeOptions, type SendStatus } from './realtime.js';
+import { PushClient } from './push.js';
 import { rpc, TableBuilder, type CountMethod, type QueryBuilder, type Row } from './rest.js';
 import { StorageClient } from './storage.js';
 
 export * from './auth.js';
 export * from './cookies.js';
 export * from './functions.js';
+export * from './push.js';
 export * from './realtime.js';
 export * from './rest.js';
 export * from './storage.js';
@@ -66,10 +68,13 @@ export class SnoutClient<DB = Database, S extends string = 'public'> {
 	readonly storageUrl: string;
 	readonly functionsUrl: string;
 	readonly realtimeUrl: string;
+	readonly pushUrl: string;
 	readonly auth: AuthClient;
 	readonly storage: StorageClient;
 	readonly functions: FunctionsClient;
 	readonly realtime: RealtimeClient;
+	/** Snout Push: devices, topics, sends and receipts. */
+	readonly push: PushClient;
 	/** The data API's base, for code that checks where it points. */
 	readonly rest: { url: string };
 	private readonly transport: Transport;
@@ -89,6 +94,7 @@ export class SnoutClient<DB = Database, S extends string = 'public'> {
 		this.storageUrl = joinUrl(base, 'storage/v1');
 		this.functionsUrl = joinUrl(base, 'functions/v1');
 		this.realtimeUrl = joinUrl(base.replace(/^http/, 'ws'), 'realtime/v1');
+		this.pushUrl = joinUrl(base, 'push/v1');
 		this.rest = { url: this.restUrl };
 		this.schemaName = options.db?.schema;
 
@@ -110,6 +116,7 @@ export class SnoutClient<DB = Database, S extends string = 'public'> {
 
 		this.storage = new StorageClient(this.storageUrl, this.transport);
 		this.functions = new FunctionsClient(this.functionsUrl, this.transport);
+		this.push = new PushClient(this.pushUrl, this.transport);
 		this.realtime = new RealtimeClient(this.realtimeUrl, key, this.transport, () => this.auth.getAccessToken(), options.realtime);
 
 		this.auth.onAuthStateChange((event, session) => {
