@@ -2,8 +2,8 @@
 
 Part of [snoutdata/snoutdata](https://github.com/snoutdata/snoutdata), where the docs and examples live.
 
-The JavaScript client for SnoutData Cloud. One project's data API, auth, storage, realtime
-and Snout Functions, from its URL and one key. No dependencies; runs in every browser and
+The JavaScript client for SnoutData Cloud. One project's data API, auth, storage, realtime,
+Snout Functions and push notifications, from its URL and one key. No dependencies; runs in every browser and
 in Node 22+.
 
 ```js
@@ -16,10 +16,15 @@ await db.auth.signInWithPassword({ email, password })
 await db.storage.from('documents').upload('invoices/7.pdf', file)
 db.channel('room:42').on('broadcast', { event: 'cursor' }, (m) => draw(m.payload)).subscribe()
 await db.functions.invoke('hello', { body: { name: 'Ada' } })
+await db.push.register({ transport: 'apns', token: deviceToken })
 ```
 
 The method names and result shapes match `@upstream/upstream-js` v2, so an application
 written against that moves over by changing the import.
+
+`db.push` is ours, with nothing to match: notifications to iPhone, Android and the web
+(`register`, `subscribeWeb`, `send`, topics, receipts). See
+[Push notifications](https://docs.snoutdata.com/cloud/push).
 
 ## Developing
 
