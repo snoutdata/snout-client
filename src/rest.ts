@@ -10,8 +10,8 @@
 import { joinUrl, messageOf, readBody, type Transport } from './http.js';
 
 /**
- * A row when the client was made without a `Database` type: `any`, exactly as
- * upstream-js has them, so an app written against upstream-js moves over by changing its import
+ * A row when the client was made without a `Database` type: `any`, as the v2
+ * client API has them, so an app written against that API moves over by changing its import
  * and nothing else. It was `Record<string, unknown>` in 0.1.0-0.2.0, and moving our own four apps
  * across found ~100 places that stopped compiling on that alone. With a `Database` type
  * (`snoutdata gen types typescript`), rows are exact, which is where the safety belongs.

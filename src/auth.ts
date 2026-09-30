@@ -119,9 +119,9 @@ async function pkcePair(): Promise<{ verifier: string; challenge: string }> {
 }
 
 /**
- * A stored PKCE verifier. Ours is the bare string; upstream-js writes it JSON-encoded, with
- * `/PASSWORD_RECOVERY` appended for a recovery, so a sign-in that one started and this one
- * finishes (an app that moved clients mid-redirect) still completes.
+ * A stored PKCE verifier: the bare string (0.2.0-0.2.1), or JSON-encoded, with
+ * `/PASSWORD_RECOVERY` appended for a recovery (what this client writes now, and what the v2
+ * client API's other implementations write), so a sign-in started by either still completes.
  */
 function readVerifier(stored: string | null): string | null {
 	if (!stored) {
@@ -264,7 +264,7 @@ export class AuthClient {
 	 * tabs, two origins reading one cookie, two app instances reading one file. Whoever refreshes
 	 * first rotates the refresh token, and a client still holding the old one would present a
 	 * spent token and be signed out, taking the shared store with it. So storage is read before
-	 * the session is used or refreshed, the way upstream-js reads it on every getSession.
+	 * the session is used or refreshed, as the v2 client API reads it on every getSession.
 	 */
 	private async syncFromStorage(): Promise<void> {
 		const stored = await this.readStored();
@@ -498,6 +498,8 @@ export class AuthClient {
 
 	// ---- signing in ----
 
+	// `captchaToken`, here and on the other sign-in calls, is accepted so code written against the
+	// v2 client API compiles unchanged, and is not sent: SnoutData's auth server has no captcha.
 	async signUp(credentials: {
 		email?: string;
 		phone?: string;
@@ -508,7 +510,7 @@ export class AuthClient {
 		const { email, phone, password, options = {} } = credentials;
 		const { body, error } = await this.call('signup', {
 			query: { redirect_to: options.emailRedirectTo },
-			body: { email, phone, password, data: options.data ?? {}, auth_meta_security: { captcha_token: options.captchaToken } }
+			body: { email, phone, password, data: options.data ?? {} }
 		});
 		return this.signedIn(body, error);
 	}
@@ -615,7 +617,7 @@ export class AuthClient {
 		const { provider, token, access_token, nonce, options } = credentials;
 		const { body, error } = await this.call('token', {
 			query: { grant_type: 'id_token' },
-			body: { provider, id_token: token, access_token, nonce, auth_meta_security: { captcha_token: options?.captchaToken } }
+			body: { provider, id_token: token, access_token, nonce }
 		});
 		return this.signedIn(body, error);
 	}
@@ -640,8 +642,7 @@ export class AuthClient {
 				redirect_to: options.redirectTo,
 				skip_http_redirect: true,
 				code_challenge: challenge,
-				code_challenge_method: challenge ? 's256' : undefined,
-				...(options.captchaToken ? { auth_meta_security: { captcha_token: options.captchaToken } } : {})
+				code_challenge_method: challenge ? 's256' : undefined
 			}
 		});
 		if (error) {
@@ -672,7 +673,7 @@ export class AuthClient {
 
 	private async startPkce(): Promise<string> {
 		const { verifier, challenge } = await pkcePair();
-		// JSON-encoded, as upstream-js stores it. Not a nicety: `cookieStorage` (like ssr's) reads
+		// JSON-encoded. Not a nicety: `cookieStorage` reads
 		// a value back only if it is JSON, so a bare verifier came back null and every redirect
 		// sign-in through a cookie store failed on return (0.2.0-0.2.1, found live 2026-09-26).
 		await this.storage.setItem(`${this.storageKey}-code-verifier`, JSON.stringify(verifier));
@@ -710,7 +711,6 @@ export class AuthClient {
 			query: { redirect_to: options.redirectTo },
 			body: {
 				email,
-				auth_meta_security: { captcha_token: options.captchaToken },
 				code_challenge: challenge,
 				code_challenge_method: challenge ? 's256' : undefined
 			}
@@ -769,7 +769,7 @@ export class AuthClient {
 	}
 }
 
-/** What `admin.generateLink` returns beside the user, named as upstream-js names it. */
+/** What `admin.generateLink` returns beside the user, named as the v2 client API names it. */
 export interface GenerateLinkProperties {
 	action_link: string;
 	email_otp: string;

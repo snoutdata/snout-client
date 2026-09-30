@@ -131,9 +131,9 @@ test('or, not, contains and text search encode as PostgREST expects', () => {
 });
 
 // These two are about TYPES, so what they assert is that this file compiles: an app written
-// against upstream-js moves over by changing its import (untyped rows are `any`, as there), and a
+// against the v2 client API moves over by changing its import (untyped rows are `any`, as there), and a
 // write followed by select() gives the table's rows, never `null`.
-test('untyped rows read like upstream-js, and insert().select() returns rows, not null', async () => {
+test('untyped rows are any, and insert().select() returns rows, not null', async () => {
 	const { db } = client(() => ({ body: [{ id: 7, name: 'ada' }] }));
 	const read = await db.from('people').select('id, name');
 	const names: string[] = (read.data ?? []).map((row: { name: string }) => row.name);

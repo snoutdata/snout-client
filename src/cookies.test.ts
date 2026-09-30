@@ -27,12 +27,12 @@ function jar(): CookieJar & { store: Map<string, string>; writes: string[] } {
 	};
 }
 
-// Written by @upstream/ssr 0.12.6's own stringToBase64URL for this value, so a site moving off
+// Written by the 0.12 server-side cookie helper's own base64url encoder for this value, so a site moving off
 // it reads the sessions its visitors already hold.
 const SSR_VALUE = 'base64-eyJhY2Nlc3NfdG9rZW4iOiJ0w7ZrIiwidXNlciI6eyJpZCI6Iua8ovCfmIAifX0';
 const SSR_JSON = JSON.stringify({ access_token: 'tök', user: { id: '漢😀' } });
 
-test('reads a session @upstream/ssr wrote, and writes the same bytes it would', () => {
+test('reads a session the cookie helper wrote, and writes the same bytes it would', () => {
 	const cookies = jar();
 	cookies.store.set('sb-accounts-auth-token', SSR_VALUE);
 	const storage = cookieStorage({}, cookies);

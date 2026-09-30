@@ -7,9 +7,9 @@
  * 4,096-byte limit per cookie), so a value is split across numbered cookies and joined again,
  * and chunks left over from a longer value are cleared when it shrinks.
  *
- * **The format is `@upstream/ssr`'s (0.12) byte for byte**, so a site moving to this client
- * reads the sessions its visitors already have, and a site still on ssr under the same domain
- * reads ours: the value is `base64-` + base64url(UTF-8) without padding; a value of 3,180
+ * **The format is the one server-side cookie helpers for the v2 client API write (0.12), byte
+ * for byte**, so a site moving to this client reads the sessions its visitors already have, and a
+ * site still on such a helper under the same domain reads ours: the value is `base64-` + base64url(UTF-8) without padding; a value of 3,180
  * characters or fewer (URI-encoded) is one cookie named as the key, a longer one is `<key>.0`,
  * `<key>.1`, …; and a clear at a parent domain also clears the host-only copy, which a site that
  * once stored host-only would otherwise resurrect after sign-out.

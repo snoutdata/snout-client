@@ -138,7 +138,7 @@ export class SnoutClient<DB = Database, S extends string = 'public'> {
 		return view;
 	}
 
-	/** Calls a Postgres function. Filters and modifiers apply to what it returns: `any` unless typed, as in upstream-js. */
+	/** Calls a Postgres function. Filters and modifiers apply to what it returns: `any` unless typed. */
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	rpc<T = any>(fn: string, args: Record<string, unknown> = {}, options: { head?: boolean; get?: boolean; count?: CountMethod } = {}): QueryBuilder<T> {
 		return rpc<T>(this.transport, this.restUrl, this.schemaName, fn, args, options);
