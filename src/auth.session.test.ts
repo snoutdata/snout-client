@@ -1,7 +1,7 @@
 /**
  * The auth half our own apps lean on: SSO, ID-token sign-in, pausing the refresh, a session
  * shared through storage with another tab, origin or app instance, and reading what
- * upstream-js wrote (a desktop app updated from a upstream-js build keeps its sign-in, and one
+ * an older client wrote (a desktop app updated from an older build keeps its sign-in, and one
  * rolled back still reads what this client saved).
  */
 import assert from 'node:assert/strict';
@@ -108,10 +108,10 @@ test('a session removed from shared storage signs this client out too', async ()
 	assert.equal((await db.auth.getSession()).data.session, null);
 });
 
-test('a session upstream-js saved (an older desktop, the same key) is used as it is', async () => {
+test('a session an older client saved (an older desktop, the same key) is used as it is', async () => {
 	const store = new Map<string, string>();
 	const access = jwt({ sub: 'u1', exp: inAnHour() });
-	// The exact shape upstream-js 2.x persists: its Session, JSON-encoded, under the storageKey.
+	// The exact shape a v2 client persists: its Session, JSON-encoded, under the storageKey.
 	store.set(
 		'positron-db-auth',
 		JSON.stringify({
@@ -136,7 +136,7 @@ test('a session upstream-js saved (an older desktop, the same key) is used as it
 	assert.ok(store.has('positron-db-auth'));
 });
 
-test('what a refresh saves carries every field upstream-js needs to read it back (a rollback)', async () => {
+test('what a refresh saves carries every field an older client needs to read it back (a rollback)', async () => {
 	const store = new Map<string, string>();
 	store.set('snoutdata-abc123-auth', JSON.stringify({ ...tokenBody('old', 'r1'), expires_at: Math.floor(Date.now() / 1000) - 10 }));
 	const { db } = client(() => ({ body: tokenBody('new', 'r2') }), store);
@@ -149,7 +149,7 @@ test('what a refresh saves carries every field upstream-js needs to read it back
 	assert.equal(typeof saved.expires_at, 'number');
 });
 
-test('a PKCE verifier upstream-js stored (JSON, with a recovery suffix) still finishes the sign-in', async () => {
+test('a PKCE verifier an older client stored (JSON, with a recovery suffix) still finishes the sign-in', async () => {
 	const access = jwt({ sub: 'u1', exp: inAnHour() });
 	const { db, sent, store } = client(() => ({ body: tokenBody(access, 'r1') }));
 	store.set('snoutdata-abc123-auth-code-verifier', JSON.stringify('the-verifier/PASSWORD_RECOVERY'));

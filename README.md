@@ -19,8 +19,10 @@ await db.functions.invoke('hello', { body: { name: 'Ada' } })
 await db.push.register({ transport: 'apns', token: deviceToken })
 ```
 
-The method names and result shapes match `@upstream/upstream-js` v2, so an application
-written against that moves over by changing the import.
+The method names and result shapes are the widely used v2 client API for a Postgres backend
+(`from().select()`, `auth.signInWithPassword`, `storage.from().upload`, `channel().on()`,
+`functions.invoke`), so an application written against that API moves over by changing the
+import.
 
 `db.push` is ours, with nothing to match: notifications to iPhone, Android and the web
 (`register`, `subscribeWeb`, `send`, topics, receipts). See
@@ -33,7 +35,7 @@ npm install
 npm test          # builds, then runs the unit tests (fake fetch, fake Phoenix socket)
 ```
 
-The live proof is the compatibility harness, run through this client instead of upstream-js:
+The live proof is the compatibility harness, run through this client:
 
 ```bash
 npm run build
