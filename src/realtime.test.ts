@@ -140,6 +140,41 @@ test('with table changes, SUBSCRIBED waits for Realtime to say they are live, an
 	await db.removeAllChannels();
 });
 
+test('table changes said to be live in the same read as the join reply are SUBSCRIBED at once, not after the timeout', async () => {
+	// Node's WebSocket hands both frames of one read over before the join sees its reply.
+	let refuse = false;
+	const { transport } = fakeSocket((frame, socket) => {
+		if (frame.event === 'phx_join') {
+			socket.reply(frame, { postgres_changes: [{ event: 'INSERT', schema: 'public', table: 't', id: 1 }] });
+			socket.serve({
+				topic: frame.topic,
+				event: 'system',
+				payload: refuse
+					? { status: 'error', extension: 'postgres_changes', message: 'Unable to subscribe to changes' }
+					: { status: 'ok', extension: 'postgres_changes', message: 'Subscribed to PostgreSQL' },
+				ref: null
+			});
+		} else if (frame.event === 'phx_leave') {
+			socket.reply(frame);
+		}
+	});
+	const db = createClient(URL_, 'anon-key', {
+		global: { fetch: fakeFetch().fetch },
+		auth: { persistSession: false, autoRefreshToken: false },
+		realtime: { transport, timeoutMs: 5000 }
+	});
+	const started = Date.now();
+	const live = db.channel('a').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 't' }, () => {});
+	assert.equal(await subscribed(live), 'SUBSCRIBED');
+	assert.ok(Date.now() - started < 1000, `SUBSCRIBED took ${Date.now() - started} ms`);
+	refuse = true;
+	const refused = db.channel('b').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 't' }, () => {});
+	const outcome = await new Promise<[string, Error | undefined]>((resolve) => refused.subscribe((s, e) => resolve([s, e])));
+	assert.equal(outcome[0], 'CHANNEL_ERROR');
+	assert.match(outcome[1]?.message ?? '', /Unable to subscribe/);
+	await db.removeAllChannels();
+});
+
 test('a refused join is CHANNEL_ERROR with the server\'s reason', async () => {
 	const { transport } = server((frame, socket) => {
 		if (frame.event === 'phx_join') {

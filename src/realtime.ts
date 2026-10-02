@@ -381,6 +381,12 @@ export class RealtimeChannel {
 	private rejoinTries = 0;
 	/** Set while a joined channel waits for Realtime to say its table changes are live. */
 	private awaitingChanges: ReturnType<typeof setTimeout> | undefined;
+	/**
+	 * What Realtime said about the table changes while the join still waited for its reply
+	 * (null: they are live). In Node one socket read can carry the reply AND that message,
+	 * and both are handled before the join sees its reply, so it is kept for the join.
+	 */
+	private earlyChanges: string | null | undefined;
 
 	constructor(name: string, options: ChannelOptions, client: RealtimeClient) {
 		this.name = name;
@@ -496,6 +502,7 @@ export class RealtimeChannel {
 
 	private async join(): Promise<void> {
 		this.state = 'joining';
+		this.earlyChanges = undefined;
 		const joinRef = this.client.nextRef();
 		this.joinRef = joinRef;
 		const changes = this.bindings.filter((binding) => binding.type === 'postgres_changes');
@@ -546,6 +553,9 @@ export class RealtimeChannel {
 			clearTimeout(this.awaitingChanges);
 			this.awaitingChanges = setTimeout(() => this.changesLive(null), this.client.timeoutMs);
 			unref(this.awaitingChanges);
+			if (this.earlyChanges !== undefined) {
+				this.changesLive(this.earlyChanges);
+			}
 			return;
 		}
 		this.state = 'errored';
@@ -619,8 +629,13 @@ export class RealtimeChannel {
 				this.presenceDiff(frame.payload as { joins: Record<string, { metas: Record<string, unknown>[] }>; leaves: Record<string, { metas: Record<string, unknown>[] }> });
 				return;
 			case 'system':
-				if (frame.payload.extension === 'postgres_changes' && this.awaitingChanges !== undefined) {
-					this.changesLive(frame.payload.status === 'ok' ? null : String(frame.payload.message ?? 'Realtime refused the table changes'));
+				if (frame.payload.extension === 'postgres_changes') {
+					const refusal = frame.payload.status === 'ok' ? null : String(frame.payload.message ?? 'Realtime refused the table changes');
+					if (this.awaitingChanges !== undefined) {
+						this.changesLive(refusal);
+					} else if (this.state === 'joining') {
+						this.earlyChanges = refusal;
+					}
 				}
 				this.dispatch('system', () => true, frame.payload);
 				return;
