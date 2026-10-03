@@ -26,7 +26,7 @@ import.
 
 `db.push` is ours, with nothing to match: notifications to iPhone, Android and the web
 (`register`, `subscribeWeb`, `send`, topics, receipts). See
-[Push notifications](https://docs.snoutdata.com/cloud/push).
+[Push notifications](https://docs.snoutdata.com/stack/push).
 
 ## Developing
 
