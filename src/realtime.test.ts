@@ -235,6 +235,34 @@ test('a dropped socket is reopened and the channel joined again', async () => {
 	await db.removeChannel(channel);
 });
 
+test('a channel the server closed rejoins and announces its presence again', async () => {
+	const { transport, sockets } = server();
+	const db = client(transport);
+	let joins = 0;
+	const channel = db.channel('lobby', { config: { presence: { key: 'ada' } } }).on('presence', { event: 'sync' }, () => {});
+	await new Promise<void>((resolve) =>
+		channel.subscribe((status) => {
+			if (status !== 'SUBSCRIBED') {
+				return;
+			}
+			joins += 1;
+			if (joins === 1) {
+				void channel.track({ name: 'Purple Otter' }).then(() =>
+					// What Realtime does past the message limit: a system message, then phx_close.
+					sockets[0].serve({ topic: 'realtime:lobby', event: 'phx_close', payload: {}, ref: null })
+				);
+			} else {
+				resolve();
+			}
+		})
+	);
+	await tick();
+	const tracks = sockets[0].frames.filter((f) => f.event === 'presence' && (f.payload as { event?: string }).event === 'track');
+	assert.equal(tracks.length, 2);
+	assert.deepEqual((tracks[1].payload as { payload: unknown }).payload, { name: 'Purple Otter' });
+	await db.removeChannel(channel);
+});
+
 test('removing the last channel closes the socket', async () => {
 	const { transport, sockets } = server();
 	const db = client(transport);

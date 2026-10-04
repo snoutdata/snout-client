@@ -44,6 +44,20 @@ test('a sign-up that needs confirming returns the user and no session', async ()
 	assert.equal(data.user?.id, 'u2');
 });
 
+test('a guest sign-in posts its metadata from options.data, or a bare data, and keeps the session', async () => {
+	const access = jwt({ sub: 'g1', is_anonymous: true, exp: Math.floor(Date.now() / 1000) + 3600 });
+	const { db, sent } = client(() => ({ body: tokenBody(access, 'r1') }));
+	const { data, error } = await db.auth.signInAnonymously({ options: { data: { name: 'Sleepy Otter' } } });
+	assert.equal(error, null);
+	assert.equal(data.session?.access_token, access);
+	assert.ok(sent[0].url.endsWith('/auth/v1/signup'));
+	assert.deepEqual(JSON.parse(String(sent[0].body)), { data: { name: 'Sleepy Otter' } });
+	await db.auth.signInAnonymously({ data: { name: 'Fuzzy Llama' } });
+	assert.deepEqual(JSON.parse(String(sent[1].body)), { data: { name: 'Fuzzy Llama' } });
+	await db.auth.signInAnonymously();
+	assert.deepEqual(JSON.parse(String(sent[2].body)), { data: {} });
+});
+
 test('a refused sign-in is an AuthError with the server\'s sentence and code', async () => {
 	const { db } = client(() => ({ status: 400, body: { code: 400, error_code: 'invalid_credentials', msg: 'Invalid login credentials' } }));
 	const { data, error } = await db.auth.signInWithPassword({ email: 'a@b.c', password: 'no' });

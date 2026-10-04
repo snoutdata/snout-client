@@ -24,6 +24,15 @@ The method names and result shapes are the widely used v2 client API for a Postg
 `functions.invoke`), so an application written against that API moves over by changing the
 import.
 
+No bundler? The published files are plain ES modules, so a page can import them from a CDN, pinned
+to an exact version:
+
+```html
+<script type="module">
+  import { createClient } from 'https://cdn.jsdelivr.net/npm/@snoutdata/client@0.3.1/dist/index.js'
+</script>
+```
+
 `db.push` is ours, with nothing to match: notifications to iPhone, Android and the web
 (`register`, `subscribeWeb`, `send`, topics, receipts). See
 [Push notifications](https://docs.snoutdata.com/stack/push).

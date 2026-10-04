@@ -521,10 +521,16 @@ export class AuthClient {
 		return this.signedIn(body, error);
 	}
 
-	/** An account with no email or password, which can be upgraded later with `updateUser`. */
-	async signInAnonymously(options: { data?: Record<string, unknown> } = {}): Promise<AuthResult<{ user: User | null; session: Session | null }>> {
+	/**
+	 * An account with no email or password, which can be upgraded later with `updateUser`. The
+	 * metadata goes in `options.data`, as `signUp` takes it; a bare `data` is still read, since
+	 * 0.3.1 and earlier took it there.
+	 */
+	async signInAnonymously(
+		credentials: { options?: { data?: Record<string, unknown> }; data?: Record<string, unknown> } = {}
+	): Promise<AuthResult<{ user: User | null; session: Session | null }>> {
 		await this.ready;
-		const { body, error } = await this.call('signup', { body: { data: options.data ?? {} } });
+		const { body, error } = await this.call('signup', { body: { data: credentials.options?.data ?? credentials.data ?? {} } });
 		return this.signedIn(body, error);
 	}
 
