@@ -29,7 +29,7 @@ to an exact version:
 
 ```html
 <script type="module">
-  import { createClient } from 'https://cdn.jsdelivr.net/npm/@snoutdata/client@0.3.1/dist/index.js'
+  import { createClient } from 'https://cdn.jsdelivr.net/npm/@snoutdata/client@0.3.2/dist/index.js'
 </script>
 ```
 
