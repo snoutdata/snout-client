@@ -376,6 +376,16 @@ export class RealtimeChannel {
 	private readonly client: RealtimeClient;
 	private readonly bindings: Binding[] = [];
 	private presence: Record<string, Presence[]> = {};
+	/**
+	 * What this client last announced with `track`, re-sent on every rejoin.
+	 *
+	 * Presence lives on the server as long as the channel process that tracked it. When the
+	 * channel is closed (the server's "Too many messages per second", a dropped socket, a
+	 * restart), the rejoin is automatic but the presence was not: everybody else saw this
+	 * player leave and never come back, although the socket was fine. Remembering the state is
+	 * what makes a rejoin restore the player as well as the channel.
+	 */
+	private tracked: Record<string, unknown> | null = null;
 	private statusCallback: ((status: SubscribeStatus, error?: Error) => void) | undefined;
 	private rejoinTimer: ReturnType<typeof setTimeout> | undefined;
 	private rejoinTries = 0;
@@ -430,6 +440,7 @@ export class RealtimeChannel {
 	/** Leaves. The channel can be discarded afterwards; `removeChannel` also forgets it. */
 	async unsubscribe(): Promise<SendStatus> {
 		this.wanted = false;
+		this.tracked = null;
 		clearTimeout(this.rejoinTimer);
 		clearTimeout(this.awaitingChanges);
 		this.awaitingChanges = undefined;
@@ -468,11 +479,21 @@ export class RealtimeChannel {
 
 	/** Announce this client on the channel with `state`, replacing what it announced before. */
 	track(state: Record<string, unknown>): Promise<SendStatus> {
+		// Kept even when the send fails (the channel is rejoining): the next join sends it.
+		this.tracked = state;
 		return this.send({ type: 'presence', event: 'track', payload: state });
 	}
 
 	untrack(): Promise<SendStatus> {
+		this.tracked = null;
 		return this.send({ type: 'presence', event: 'untrack' });
+	}
+
+	/** After a join: announce again whatever was tracked before the channel was lost. */
+	private retrack(): void {
+		if (this.tracked) {
+			void this.send({ type: 'presence', event: 'track', payload: this.tracked });
+		}
 	}
 
 	/** Everyone present, by key. Each key may be present more than once (two tabs). */
@@ -542,6 +563,7 @@ export class RealtimeChannel {
 			}
 			this.state = 'joined';
 			this.rejoinTries = 0;
+			this.retrack();
 			if (changes.length === 0) {
 				this.statusCallback?.('SUBSCRIBED');
 				return;
