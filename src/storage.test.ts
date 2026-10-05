@@ -65,3 +65,56 @@ test('a function that answers 500 is an HTTP error whose response can still be r
 	assert.equal(error?.name, 'FunctionsHttpError');
 	assert.deepEqual(await error?.context?.json(), { reason: 'boom' });
 });
+
+test('a redirect to another origin is followed without the key or the bearer', async () => {
+	const { db, sent } = client((request) =>
+		request.url.startsWith(URL_) ? { status: 307, body: '', headers: { location: 'https://evil.example/steal' } } : { body: { ok: true } }
+	);
+	const { data, error } = await db.fn.call('x', { body: { a: 1 } });
+	assert.equal(error, null);
+	assert.deepEqual(data, { ok: true });
+	assert.equal(sent.length, 2);
+	assert.equal(sent[0].headers.apikey, 'app-key');
+	assert.equal(sent[1].url, 'https://evil.example/steal');
+	assert.equal(sent[1].method, 'POST');
+	assert.equal(sent[1].headers.apikey, undefined);
+	assert.equal(sent[1].headers.authorization, undefined);
+	assert.equal(sent[1].body, '{"a":1}');
+});
+
+test('a redirect within the project keeps the key, and a 303 becomes a GET', async () => {
+	const { db, sent } = client((request) =>
+		request.url.endsWith('/v1/fn/x') ? { status: 303, body: '', headers: { location: '/v1/fn/y' } } : { body: { ok: true } }
+	);
+	const { error } = await db.fn.call('x', { body: { a: 1 } });
+	assert.equal(error, null);
+	assert.equal(sent[1].url, `${URL_}/v1/fn/y`);
+	assert.equal(sent[1].method, 'GET');
+	assert.equal(sent[1].body, undefined);
+	assert.equal(sent[1].headers.apikey, 'app-key');
+});
+
+test('a storage download redirected to a presigned URL reaches it without the key', async () => {
+	const { db, sent } = client((request) =>
+		request.url.startsWith(URL_) ? { status: 302, body: '', headers: { location: 'https://bucket.r2.example/obj?sig=1' } } : { body: 'bytes' }
+	);
+	const { error } = await db.files.space('docs').download('a.txt');
+	assert.equal(error, null);
+	assert.equal(sent[1].url, 'https://bucket.r2.example/obj?sig=1');
+	assert.equal(sent[1].headers.apikey, undefined);
+});
+
+test('a "." or ".." path segment is refused, encoded or not, before anything is sent', async () => {
+	const { db, sent } = client(() => ({ body: {} }));
+	await assert.rejects(async () => db.files.space('docs').download('../../../v1/data/rpc/f'), /may not contain/);
+	await assert.rejects(async () => db.files.space('docs').upload('a/%2e%2e/b', 'x'), /may not contain/);
+	await assert.rejects(async () => db.files.space('..').list(), /may not contain/);
+	assert.throws(() => db.from('..'), /may not contain/);
+	assert.throws(() => db.rpc('.'), /may not contain/);
+	const { error } = await db.fn.call('../../v1/data/rpc/f');
+	assert.match(error?.message ?? '', /may not contain/);
+	assert.equal(sent.length, 0);
+	// A dot inside a name is still a name.
+	await db.files.space('docs').download('a/..b/.c');
+	assert.equal(new URL(sent[0].url).pathname, '/v1/files/file/docs/a/..b/.c');
+});
