@@ -6,7 +6,7 @@
  * `error` whose `context` is the Response, so its own body can still be read.
  */
 
-import { joinUrl, type Transport } from './http.js';
+import { checkSegment, joinUrl, type Transport } from './http.js';
 
 export class FunctionsError extends Error {
 	/** The function's own response, when it answered at all. */
@@ -35,6 +35,15 @@ export class FunctionsClient {
 	) {}
 
 	async invoke<T = unknown>(name: string, options: InvokeOptions = {}): Promise<FunctionsResult<T>> {
+		// The name is sent as written (a subpath or a query string is the function's own), but a
+		// `.` or `..` segment would resolve out of /functions/v1 before the request leaves.
+		try {
+			for (const segment of name.split(/[?#]/)[0].split('/')) {
+				checkSegment(segment, name);
+			}
+		} catch (cause) {
+			return { data: null, error: new FunctionsError((cause as Error).message, 'FunctionsFetchError') };
+		}
 		const headers: Record<string, string> = { ...(await this.transport.headers()) };
 		const given = options.body;
 		let body: BodyInit | undefined;

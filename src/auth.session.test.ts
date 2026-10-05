@@ -179,3 +179,57 @@ test('stopAutoRefresh holds a due refresh until startAutoRefresh, and debug says
 	assert.ok(lines.every((line) => !line.includes('a1') && !line.includes('r1')));
 	db.auth.stopAutoRefresh();
 });
+
+/** Runs `body` with a browser-like `location` and `history` for the URL a redirect landed on. */
+async function atUrl(href: string, body: (replaced: string[]) => Promise<void>): Promise<void> {
+	const g = globalThis as Record<string, unknown>;
+	const replaced: string[] = [];
+	g.location = { href };
+	g.history = { state: null, replaceState: (_s: unknown, _t: string, to: string) => void replaced.push(to) };
+	try {
+		await body(replaced);
+	} finally {
+		delete g.location;
+		delete g.history;
+	}
+}
+
+test('PKCE mode ignores #access_token in the URL and keeps the stored session (no login CSRF)', async () => {
+	const mine = jwt({ sub: 'u1', exp: inAnHour() });
+	const theirs = jwt({ sub: 'attacker', exp: inAnHour() });
+	const store = new Map<string, string>();
+	store.set('snoutdata-abc123-auth', JSON.stringify({ ...tokenBody(mine, 'r-mine'), expires_at: inAnHour() }));
+	await atUrl(`https://app.example.com/#access_token=${theirs}&refresh_token=r-theirs&expires_in=3600`, async (replaced) => {
+		const { fetch, sent } = fakeFetch(() => ({ body: { id: 'attacker', email: 'eve@example.com' } }));
+		const db = createClient(URL_, 'anon-key', { global: { fetch }, auth: { autoRefreshToken: false, detectSessionInUrl: true, flowType: 'pkce', storage: mapStorage(store) } });
+		const { data } = await db.auth.getSession();
+		assert.equal(data.session?.access_token, mine);
+		assert.equal(sent.length, 0);
+		assert.equal(replaced.length, 0);
+		assert.match(store.get('snoutdata-abc123-auth') ?? '', /r-mine/);
+	});
+});
+
+test('PKCE is the default flow, so a fragment is ignored without naming it', async () => {
+	const theirs = jwt({ sub: 'attacker', exp: inAnHour() });
+	await atUrl(`https://app.example.com/#access_token=${theirs}&refresh_token=r-theirs`, async () => {
+		const { fetch, sent } = fakeFetch(() => ({ body: { id: 'attacker' } }));
+		const store = new Map<string, string>();
+		const db = createClient(URL_, 'anon-key', { global: { fetch }, auth: { autoRefreshToken: false, detectSessionInUrl: true, storage: mapStorage(store) } });
+		const { data } = await db.auth.getSession();
+		assert.equal(data.session, null);
+		assert.equal(sent.length, 0);
+	});
+});
+
+test('implicit mode still finishes a redirect from #access_token', async () => {
+	const access = jwt({ sub: 'u1', exp: inAnHour() });
+	await atUrl(`https://app.example.com/cb?x=1#access_token=${access}&refresh_token=r1&expires_in=3600`, async (replaced) => {
+		const { fetch, sent } = fakeFetch(() => ({ body: { id: 'u1', email: 'ada@example.com' } }));
+		const db = createClient(URL_, 'anon-key', { global: { fetch }, auth: { autoRefreshToken: false, detectSessionInUrl: true, flowType: 'implicit', storage: mapStorage(new Map()) } });
+		const { data } = await db.auth.getSession();
+		assert.equal(data.session?.access_token, access);
+		assert.equal(new URL(sent[0].url).pathname, '/auth/v1/user');
+		assert.deepEqual(replaced, ['/cb?x=1']);
+	});
+});

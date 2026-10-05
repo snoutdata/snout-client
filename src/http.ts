@@ -55,13 +55,95 @@ export function joinUrl(base: string, path: string): string {
 	return `${base.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
 }
 
-/** An object path with each segment encoded and the slashes kept. */
+/**
+ * An object path with each segment encoded and the slashes kept.
+ *
+ * A `.` or `..` segment is refused: the URL parser resolves it (encoded as `%2e` too) before
+ * the request leaves, so a path another user chose could walk out of its product prefix and
+ * send this user's token and body to another endpoint of the project.
+ */
 export function encodePath(path: string): string {
 	return path
 		.replace(/^\/+|\/+$/g, '')
 		.split('/')
-		.map((segment) => encodeURIComponent(segment))
+		.map((segment) => encodeURIComponent(checkSegment(segment, path)))
 		.join('/');
+}
+
+/** One path segment that cannot be `.` or `..`, however it is spelled. */
+export function checkSegment(segment: string, whole: string = segment): string {
+	let decoded = segment;
+	try {
+		decoded = decodeURIComponent(segment);
+	} catch {
+		// Not percent-encoding at all; encodeURIComponent will escape it as it stands.
+	}
+	if (decoded === '.' || decoded === '..') {
+		throw new TypeError(`A path may not contain a "${decoded}" segment: ${whole}`);
+	}
+	return segment;
+}
+
+const REDIRECTS = new Set([301, 302, 303, 307, 308]);
+const KEY_HEADERS = new Set(['apikey', 'authorization']);
+
+/**
+ * A fetch that never carries the key or the bearer to another origin on a redirect.
+ *
+ * Fetch drops `Authorization` on a cross-origin hop but keeps the custom `apikey` header, so a
+ * function (or anything else on the project) answering `307 Location: https://elsewhere` would
+ * hand over the key, which on a server is the `service_role` key. Here a redirect is followed
+ * by hand: within the request's own origin as fetch would, and to another origin without
+ * those two headers (a storage download redirected to a presigned URL needs neither).
+ *
+ * In a browser the key is the public anon key and a manual redirect cannot be read, so the
+ * platform's own following is kept. A caller that set `redirect` itself is left alone.
+ */
+export function guardRedirects(inner: Fetch): Fetch {
+	if (isBrowser()) {
+		return inner;
+	}
+	const guarded = async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
+		if (init.redirect !== undefined || (typeof input !== 'string' && !(input instanceof URL))) {
+			return inner(input, init);
+		}
+		let url = new URL(String(input));
+		const origin = url.origin;
+		let current: RequestInit = { ...init, redirect: 'manual' };
+		for (let hop = 0; ; hop++) {
+			const response = await inner(url.toString(), current);
+			const location = response.headers.get('location');
+			if (!REDIRECTS.has(response.status) || !location) {
+				return response;
+			}
+			if (hop >= 20) {
+				throw new TypeError('Too many redirects');
+			}
+			const method = (current.method ?? 'GET').toUpperCase();
+			const toGet = (response.status === 303 && method !== 'HEAD') || ((response.status === 301 || response.status === 302) && method === 'POST');
+			const stream = typeof ReadableStream !== 'undefined' && current.body instanceof ReadableStream;
+			if (!toGet && stream) {
+				// A stream cannot be sent twice; the caller sees the redirect, as fetch would refuse it.
+				return response;
+			}
+			await response.body?.cancel().catch(() => undefined);
+			const next = new URL(location, url);
+			const headers: Record<string, string> = {};
+			new Headers(current.headers).forEach((value, name) => {
+				if (next.origin !== origin && KEY_HEADERS.has(name)) {
+					return;
+				}
+				if (toGet && (name === 'content-type' || name === 'content-length')) {
+					return;
+				}
+				headers[name] = value;
+			});
+			const { duplex: _duplex, ...rest } = current as RequestInit & { duplex?: string };
+			current = toGet ? { ...rest, method: 'GET', body: undefined, headers } : { ...current, headers };
+			url = next;
+		}
+	};
+	return guarded as Fetch;
 }
 
 export function isBrowser(): boolean {

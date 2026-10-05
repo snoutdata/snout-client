@@ -297,7 +297,14 @@ export class AuthClient {
 		this.schedule();
 	}
 
-	/** Finishes a redirect: `?code=` (PKCE) or `#access_token=` (implicit). */
+	/**
+	 * Finishes a redirect: `?code=` (PKCE) or `#access_token=` (implicit).
+	 *
+	 * In PKCE mode only the code exchange establishes a session, since it needs the verifier
+	 * this storage holds for a sign-in it started. A fragment is ignored there: anyone can mint
+	 * one for their OWN account and link a victim to it, which would silently replace the
+	 * victim's session with the attacker's (login CSRF).
+	 */
 	private async fromUrl(): Promise<void> {
 		const url = new URL(location.href);
 		const hash = new URLSearchParams(url.hash.replace(/^#/, ''));
@@ -308,6 +315,9 @@ export class AuthClient {
 				url.searchParams.delete('code');
 				history.replaceState(history.state, '', url.toString());
 			}
+			return;
+		}
+		if (this.flowType !== 'implicit') {
 			return;
 		}
 		const accessToken = hash.get('access_token');

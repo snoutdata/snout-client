@@ -14,7 +14,7 @@
 
 import { AuthClient, type AuthOptions } from './auth.js';
 import { FunctionsClient } from './functions.js';
-import { joinUrl, type Fetch, type Transport } from './http.js';
+import { checkSegment, guardRedirects, joinUrl, type Fetch, type Transport } from './http.js';
 import { RealtimeClient, type ChannelOptions, type RealtimeChannel, type RealtimeOptions, type SendStatus } from './realtime.js';
 import { PushClient } from './push.js';
 import { rpc, TableBuilder, type CountMethod, type QueryBuilder, type Row } from './rest.js';
@@ -98,7 +98,7 @@ export class SnoutClient<DB = Database, S extends string = 'public'> {
 		this.rest = { url: this.restUrl };
 		this.schemaName = options.db?.schema;
 
-		const fetchImpl: Fetch = options.global?.fetch ?? ((...args) => fetch(...args));
+		const fetchImpl: Fetch = guardRedirects(options.global?.fetch ?? ((...args) => fetch(...args)));
 		const globalHeaders = { 'X-Client-Info': 'snoutdata-js/0.2.2', ...options.global?.headers };
 		const ref = new URL(base).hostname.split('.')[0];
 		this.auth = new AuthClient(this.authUrl, key, fetchImpl, globalHeaders, ref, options.auth);
@@ -128,7 +128,7 @@ export class SnoutClient<DB = Database, S extends string = 'public'> {
 
 	/** A table or view. Awaiting the builder it returns sends the request. */
 	from<N extends RelationName<DB, S>>(relation: N): TableBuilder<RowOf<DB, S, N>> {
-		return new TableBuilder(this.transport, joinUrl(this.restUrl, encodeURIComponent(relation)), this.schemaName);
+		return new TableBuilder(this.transport, joinUrl(this.restUrl, encodeURIComponent(checkSegment(relation))), this.schemaName);
 	}
 
 	/** The same client, pointed at another schema (which must be exposed to the data API). */

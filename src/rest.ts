@@ -7,7 +7,7 @@
  * a refusal is an `error` rather than a throw, unless `throwOnError()` asks for a throw.
  */
 
-import { joinUrl, messageOf, readBody, type Transport } from './http.js';
+import { checkSegment, joinUrl, messageOf, readBody, type Transport } from './http.js';
 
 /**
  * A row when the client was made without a `Database` type: `any`, as the v2
@@ -531,7 +531,7 @@ export function rpc<T>(
 	args: Record<string, unknown> = {},
 	options: { head?: boolean; get?: boolean; count?: CountMethod } = {}
 ): QueryBuilder<T> {
-	const url = new URL(joinUrl(restUrl, `rpc/${encodeURIComponent(fn)}`));
+	const url = new URL(joinUrl(restUrl, `rpc/${encodeURIComponent(checkSegment(fn))}`));
 	let method: Method = 'POST';
 	let body: unknown = args;
 	if (options.head || options.get) {
