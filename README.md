@@ -44,12 +44,8 @@ npm install
 npm test          # builds, then runs the unit tests (fake fetch, fake Phoenix socket)
 ```
 
-The live proof is the compatibility harness, run through this client:
-
-```bash
-npm run build
-bash apps/cloud/compat/compat.sh --yes --ref <ref> --client snoutdata
-```
+Beyond the unit tests, a release that changes behaviour is run against a live SnoutData Cloud
+project before it is published.
 
 ## Licence
 
