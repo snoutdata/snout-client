@@ -273,3 +273,48 @@ test('removing the last channel closes the socket', async () => {
 	assert.equal(sockets[0].readyState, 3);
 	assert.equal(db.getChannels().length, 0);
 });
+
+test('call() runs a handler and resolves with its result; a failure is an error with its code', async () => {
+	const { transport, sockets } = server((frame, socket) => {
+		if (frame.event !== 'broadcast') {
+			return false;
+		}
+		const body = frame.payload as { event: string; payload: { n?: number }; call?: boolean };
+		if (body.event === 'double') {
+			socket.reply(frame, { result: { n: (body.payload.n ?? 0) * 2 } });
+		} else {
+			socket.reply(frame, { error: { code: 'P0001', message: 'room is full' } }, 'error');
+		}
+		return true;
+	});
+	const db = client(transport);
+	const channel = db.channel('room:1');
+	assert.equal(await subscribed(channel), 'SUBSCRIBED');
+	const ok = await channel.call<{ n: number }>('double', { n: 21 });
+	assert.deepEqual(ok, { data: { n: 42 }, error: null });
+	const sent = sockets[0].frames.find((f) => f.event === 'broadcast');
+	assert.deepEqual(sent?.payload, { type: 'broadcast', event: 'double', payload: { n: 21 }, call: true });
+	const failed = await channel.call('join');
+	assert.equal(failed.data, null);
+	assert.equal(failed.error?.code, 'P0001');
+	assert.equal(failed.error?.message, 'room is full');
+	await db.removeChannel(channel);
+});
+
+test('call() on a channel that is not joined says so without sending', async () => {
+	const { transport, sockets } = server();
+	const db = client(transport);
+	const result = await db.channel('room:1').call('anything');
+	assert.equal(result.error?.code, 'not_joined');
+	assert.equal(sockets.length, 0);
+});
+
+test('call() with no reply is timed_out', async () => {
+	const { transport } = server((frame) => frame.event === 'broadcast');
+	const db = client(transport);
+	const channel = db.channel('room:1');
+	assert.equal(await subscribed(channel), 'SUBSCRIBED');
+	const result = await channel.call('silent');
+	assert.equal(result.error?.code, 'timed_out');
+	await db.removeChannel(channel);
+});

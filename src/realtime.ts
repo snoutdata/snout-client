@@ -92,6 +92,21 @@ interface Binding {
 
 type Reply = { status: string; response: Record<string, unknown> };
 
+/**
+ * A realtime handler (`snout_live.on()`) that did not complete. `code` is `unauthorized`,
+ * `timeout`, `no_handler`, `not_joined`, `timed_out` (no reply came), or the SQLSTATE the
+ * handler raised (`P0001` for a plain `raise exception`).
+ */
+export class RealtimeHandlerError extends Error {
+	readonly code: string;
+
+	constructor(message: string, code: string) {
+		super(message);
+		this.name = 'RealtimeHandlerError';
+		this.code = code;
+	}
+}
+
 export interface RealtimeOptions {
 	/** A WebSocket constructor, where the platform has none. Node 22 and every browser do. */
 	transport?: typeof WebSocket;
@@ -475,6 +490,39 @@ export class RealtimeChannel {
 		}
 		const reply = await this.client.request(frame);
 		return reply.status === 'ok' ? 'ok' : reply.status === 'timeout' ? 'timed out' : 'error';
+	}
+
+	/**
+	 * Runs the project's realtime handler for `event` on this channel (registered with
+	 * `snout_live.on()` in SQL) as the signed-in user, and resolves with what it returned. What the
+	 * handler sends with `snout_live.emit()` reaches the channel only if it succeeded. The channel
+	 * must be joined.
+	 */
+	async call<T = unknown>(event: string, payload: unknown = {}): Promise<{ data: T | null; error: RealtimeHandlerError | null }> {
+		if (this.state !== 'joined' || !this.client.isConnected()) {
+			return { data: null, error: new RealtimeHandlerError('The channel is not joined', 'not_joined') };
+		}
+		// `call: true` tells Realtime to answer `no_handler` rather than relay the message when no
+		// handler is registered for it.
+		const frame: Frame = {
+			topic: this.topic,
+			event: 'broadcast',
+			payload: { type: 'broadcast', event, payload, call: true },
+			ref: null,
+			join_ref: this.joinRef
+		};
+		const reply = await this.client.request(frame);
+		if (reply.status === 'ok') {
+			return { data: (reply.response.result ?? null) as T | null, error: null };
+		}
+		if (reply.status === 'timeout') {
+			return { data: null, error: new RealtimeHandlerError('Realtime did not answer in time', 'timed_out') };
+		}
+		const failure = reply.response.error as { code?: string; message?: string } | string | undefined;
+		if (typeof failure === 'object' && failure !== null) {
+			return { data: null, error: new RealtimeHandlerError(failure.message ?? 'The handler failed', failure.code ?? 'error') };
+		}
+		return { data: null, error: new RealtimeHandlerError(typeof failure === 'string' ? failure : 'The handler failed', typeof failure === 'string' ? failure : 'error') };
 	}
 
 	/** Announce this client on the channel with `state`, replacing what it announced before. */
