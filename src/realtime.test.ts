@@ -314,7 +314,14 @@ test('call() with no reply is timed_out', async () => {
 	const db = client(transport);
 	const channel = db.channel('room:1');
 	assert.equal(await subscribed(channel), 'SUBSCRIBED');
-	const result = await channel.call('silent');
-	assert.equal(result.error?.code, 'timed_out');
+	// The client's reply timer is unref'd (it must never hold a process open), so with nothing
+	// else pending Node would end the test before it fires.
+	const keepAlive = setInterval(() => {}, 50);
+	try {
+		const result = await channel.call('silent');
+		assert.equal(result.error?.code, 'timed_out');
+	} finally {
+		clearInterval(keepAlive);
+	}
 	await db.removeChannel(channel);
 });
