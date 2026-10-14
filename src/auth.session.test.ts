@@ -1,3 +1,8 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) 2026 SNOUTDATA INC. All rights reserved.
+ *  Licensed under the Apache License, Version 2.0. See LICENSE in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
 /**
  * The auth half our own apps lean on: SSO, ID-token sign-in, pausing the refresh, a session
  * shared through storage with another tab, origin or app instance, and reading what

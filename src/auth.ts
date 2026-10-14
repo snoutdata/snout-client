@@ -1,3 +1,8 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) 2026 SNOUTDATA INC. All rights reserved.
+ *  Licensed under the Apache License, Version 2.0. See LICENSE in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
 /**
  * Auth: accounts, sessions and the token every other product sends.
  *
@@ -630,7 +635,7 @@ export class AuthClient {
 		options?: { captchaToken?: string };
 	}): Promise<AuthResult<{ user: User | null; session: Session | null }>> {
 		await this.ready;
-		const { provider, token, access_token, nonce, options } = credentials;
+		const { provider, token, access_token, nonce } = credentials;
 		const { body, error } = await this.call('token', {
 			query: { grant_type: 'id_token' },
 			body: { provider, id_token: token, access_token, nonce }
