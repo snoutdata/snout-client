@@ -33,6 +33,36 @@ export interface InvokeOptions {
 	signal?: AbortSignal;
 }
 
+/**
+ * A function's name, by the rule the control plane applies when one is deployed: letters,
+ * digits, hyphens and underscores, up to 48 characters, starting with a letter or a digit.
+ */
+const FUNCTION_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$/;
+
+/** A backslash (the URL parser reads it as a slash) or a control character (it drops tabs and newlines). */
+const RESOLVED_AWAY = /[\\\u0000-\u001f\u007f]/;
+
+/**
+ * Refuses a target that would not stay under /v1/fn. The name must be one a function can
+ * have; after it, a subpath is the function's own, but a `.` or `..` segment, a backslash or a
+ * control character would be resolved by the URL parser before the request leaves.
+ */
+function checkTarget(target: string): void {
+	const path = target.split(/[?#]/)[0].replace(/^\/+/, '');
+	const [name, ...subpath] = path.split('/');
+	if (!FUNCTION_NAME.test(name)) {
+		throw new TypeError(
+			`Not a function name: ${JSON.stringify(name)}. Letters, digits, hyphens and underscores, up to 48 characters, starting with a letter or a digit.`
+		);
+	}
+	if (RESOLVED_AWAY.test(path)) {
+		throw new TypeError(`A function path may not contain a backslash or a control character: ${JSON.stringify(target)}`);
+	}
+	for (const segment of subpath) {
+		checkSegment(segment, target);
+	}
+}
+
 export class FunctionsClient {
 	constructor(
 		/** @internal */ readonly url: string,
@@ -40,12 +70,10 @@ export class FunctionsClient {
 	) {}
 
 	async invoke<T = unknown>(name: string, options: InvokeOptions = {}): Promise<FunctionsResult<T>> {
-		// The name is sent as written (a subpath or a query string is the function's own), but a
-		// `.` or `..` segment would resolve out of /v1/fn before the request leaves.
+		// The name is sent as written (a subpath or a query string is the function's own), once it
+		// is known to stay under /v1/fn.
 		try {
-			for (const segment of name.split(/[?#]/)[0].split('/')) {
-				checkSegment(segment, name);
-			}
+			checkTarget(name);
 		} catch (cause) {
 			return { data: null, error: new FunctionsError((cause as Error).message, 'FunctionsFetchError') };
 		}

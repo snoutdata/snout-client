@@ -64,6 +64,33 @@ test('functions.invoke sends JSON and decodes the answer by its type', async () 
 	assert.equal(sent[0].headers['content-type'], 'application/json');
 });
 
+test('functions.invoke refuses a name or subpath the URL parser would resolve out of /v1/fn', async () => {
+	const { db, sent } = client(() => ({ body: {} }));
+	// A backslash is a slash to the URL parser, and a tab or a newline is dropped by it, so each of
+	// these reaches /v1/data/rpc/f with the caller's token unless it is refused first.
+	for (const target of ['..\\..\\rest\\v1\\rpc\\f', 'echo/..\\..\\..\\rest\\v1\\rpc\\f', 'echo/.\t./.\n./../v1/data/rpc/f', '.\t./.\t./rest']) {
+		const resolved = new URL(`${URL_}/v1/fn/${target}`).pathname;
+		assert.ok(!resolved.startsWith('/v1/fn/'), `${JSON.stringify(target)} does escape: ${resolved}`);
+		const { error } = await db.fn.call(target);
+		assert.equal(error?.name, 'FunctionsFetchError', JSON.stringify(target));
+	}
+	// The control plane's own rule for a name: letters, digits, hyphens and underscores, up to 48.
+	for (const name of ['', 'a.b', 'é', 'x'.repeat(49), '-lead', 'sp ace']) {
+		const { error } = await db.fn.call(name);
+		assert.match(error?.message ?? '', /not a function name/i, JSON.stringify(name));
+	}
+	assert.equal(sent.length, 0);
+	// What a function may be called with still goes through as written.
+	for (const target of ['send-email', 'send_email2', '/echo', 'echo/users/7', 'echo/a%20b?q=..\\x#frag', 'x'.repeat(48)]) {
+		const { error } = await db.fn.call(target);
+		assert.equal(error, null, target);
+	}
+	assert.deepEqual(
+		sent.map((request) => new URL(request.url).pathname),
+		['/v1/fn/send-email', '/v1/fn/send_email2', '/v1/fn/echo', '/v1/fn/echo/users/7', '/v1/fn/echo/a%20b', `/v1/fn/${'x'.repeat(48)}`]
+	);
+});
+
 test('a function that answers 500 is an HTTP error whose response can still be read', async () => {
 	const { db } = client(() => ({ status: 500, body: { reason: 'boom' } }));
 	const { error } = await db.fn.call('echo');
@@ -117,7 +144,7 @@ test('a "." or ".." path segment is refused, encoded or not, before anything is 
 	assert.throws(() => db.from('..'), /may not contain/);
 	assert.throws(() => db.rpc('.'), /may not contain/);
 	const { error } = await db.fn.call('../../v1/data/rpc/f');
-	assert.match(error?.message ?? '', /may not contain/);
+	assert.match(error?.message ?? '', /not a function name/i);
 	assert.equal(sent.length, 0);
 	// A dot inside a name is still a name.
 	await db.files.space('docs').download('a/..b/.c');
