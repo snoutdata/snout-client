@@ -28,7 +28,7 @@ to an exact version:
 
 ```html
 <script type="module">
-  import { snout } from 'https://cdn.jsdelivr.net/npm/@snoutdata/client@0.3.2/dist/index.js'
+  import { snout } from 'https://cdn.jsdelivr.net/npm/@snoutdata/client@0.3.4/dist/index.js'
 </script>
 ```
 

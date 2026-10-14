@@ -24,6 +24,7 @@ import { RealtimeClient, type ChannelOptions, type RealtimeChannel, type Realtim
 import { PushClient } from './push.js';
 import { rpc, TableBuilder, type CountMethod, type QueryBuilder, type Row } from './rest.js';
 import { StorageClient } from './storage.js';
+import { VERSION } from './version.js';
 
 export * from './auth.js';
 export * from './cookies.js';
@@ -104,7 +105,7 @@ export class SnoutClient<DB = Database, S extends string = 'public'> {
 		this.schemaName = options.db?.schema;
 
 		const fetchImpl: Fetch = guardRedirects(options.global?.fetch ?? ((...args) => fetch(...args)));
-		const globalHeaders = { 'X-Client-Info': 'snoutdata-js/0.2.2', ...options.global?.headers };
+		const globalHeaders = { 'X-Client-Info': `snoutdata-js/${VERSION}`, ...options.global?.headers };
 		const ref = new URL(base).hostname.split('.')[0];
 		this.auth = new AuthClient(this.authUrl, key, fetchImpl, globalHeaders, ref, options.auth);
 
