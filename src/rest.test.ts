@@ -135,9 +135,9 @@ test('or, not, contains and text search encode as PostgREST expects', () => {
 	assert.equal(url.searchParams.get('body'), 'wfts(english).cat & dog');
 });
 
-// These two are about TYPES, so what they assert is that this file compiles: an app written
-// against the v2 client API moves over by changing its import (untyped rows are `any`, as there), and a
-// write followed by select() gives the table's rows, never `null`.
+// These two are about TYPES, so what they assert is that this file compiles: untyped rows are
+// `any`, so untyped code reads them without a cast, and a write followed by select() gives the
+// table's rows, never `null`.
 test('untyped rows are any, and insert().select() returns rows, not null', async () => {
 	const { db } = client(() => ({ body: [{ id: 7, name: 'ada' }] }));
 	const read = await db.from('people').select('id, name');

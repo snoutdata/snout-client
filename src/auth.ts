@@ -125,8 +125,8 @@ async function pkcePair(): Promise<{ verifier: string; challenge: string }> {
 
 /**
  * A stored PKCE verifier: the bare string (0.2.0-0.2.1), or JSON-encoded, with
- * `/PASSWORD_RECOVERY` appended for a recovery (what this client writes now, and what the v2
- * client API's other implementations write), so a sign-in started by either still completes.
+ * `/PASSWORD_RECOVERY` appended for a recovery (what this client writes now), so a sign-in
+ * started by an older version still completes.
  */
 function readVerifier(stored: string | null): string | null {
 	if (!stored) {
@@ -269,7 +269,7 @@ export class AuthClient {
 	 * tabs, two origins reading one cookie, two app instances reading one file. Whoever refreshes
 	 * first rotates the refresh token, and a client still holding the old one would present a
 	 * spent token and be signed out, taking the shared store with it. So storage is read before
-	 * the session is used or refreshed, as the v2 client API reads it on every getSession.
+	 * the session is used or refreshed, on every getSession.
 	 */
 	private async syncFromStorage(): Promise<void> {
 		const stored = await this.readStored();
@@ -513,8 +513,8 @@ export class AuthClient {
 
 	// ---- signing in ----
 
-	// `captchaToken`, here and on the other sign-in calls, is accepted so code written against the
-	// v2 client API compiles unchanged, and is not sent: SnoutData's auth server has no captcha.
+	// `captchaToken`, here and on the other sign-in calls, is accepted so code that passes one
+	// still compiles, and is not sent: SnoutData's auth server has no captcha.
 	async signUp(credentials: {
 		email?: string;
 		phone?: string;
@@ -790,7 +790,7 @@ export class AuthClient {
 	}
 }
 
-/** What `admin.generateLink` returns beside the user, named as the v2 client API names it. */
+/** What `admin.generateLink` returns beside the user: the link, and the parts it is made of. */
 export interface GenerateLinkProperties {
 	action_link: string;
 	email_otp: string;

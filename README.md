@@ -19,10 +19,9 @@ await db.fn.call('hello', { body: { name: 'Ada' } })
 await db.push.register({ transport: 'apns', token: deviceToken })
 ```
 
-The method names and result shapes are the widely used v2 client API for a Postgres backend
-(`from().select()`, `identity.passwordSignIn`, `files.space().upload`, `channel().on()`,
-`functions.invoke`), so an application written against that API moves over by changing the
-import.
+Every call resolves to `{ data, error }` rather than throwing, so a refusal from the database is a
+value you can show. Queries are built by chaining (`from('todos').select().eq().order()`), and with
+the types `snoutdata gen types typescript` writes, every row is typed from your own schema.
 
 No bundler? The published files are plain ES modules, so a page can import them from a CDN, pinned
 to an exact version:

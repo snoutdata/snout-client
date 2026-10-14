@@ -116,7 +116,7 @@ test('a session removed from shared storage signs this client out too', async ()
 test('a session an older client saved (an older desktop, the same key) is used as it is', async () => {
 	const store = new Map<string, string>();
 	const access = jwt({ sub: 'u1', exp: inAnHour() });
-	// The exact shape a v2 client persists: its Session, JSON-encoded, under the storageKey.
+	// The shape an older client persisted: its Session, JSON-encoded, under the storageKey.
 	store.set(
 		'positron-db-auth',
 		JSON.stringify({
