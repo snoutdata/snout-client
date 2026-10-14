@@ -47,7 +47,7 @@ const RESOLVED_AWAY = /[\\\u0000-\u001f\u007f]/;
  * have; after it, a subpath is the function's own, but a `.` or `..` segment, a backslash or a
  * control character would be resolved by the URL parser before the request leaves.
  */
-function checkTarget(target: string): void {
+function assertInFunctions(target: string): void {
 	const path = target.split(/[?#]/)[0].replace(/^\/+/, '');
 	const [name, ...subpath] = path.split('/');
 	if (!FUNCTION_NAME.test(name)) {
@@ -73,7 +73,7 @@ export class FunctionsClient {
 		// The name is sent as written (a subpath or a query string is the function's own), once it
 		// is known to stay under /v1/fn.
 		try {
-			checkTarget(name);
+			assertInFunctions(name);
 		} catch (cause) {
 			return { data: null, error: new FunctionsError((cause as Error).message, 'FunctionsFetchError') };
 		}
