@@ -13,7 +13,7 @@ const URL_ = 'https://abc123.api.snoutdata.com';
 
 function client(answer: (request: Sent) => { status?: number; body?: unknown; headers?: Record<string, string> }) {
 	const { fetch, sent } = fakeFetch(answer);
-	const db = snout(URL_, 'app-key', { global: { fetch }, auth: { persistSession: false, autoRefreshToken: false } });
+	const db = snout(URL_, 'app-key', { vocabulary: 'old', global: { fetch }, auth: { persistSession: false, autoRefreshToken: false } });
 	return { db, sent };
 }
 
@@ -147,6 +147,6 @@ test('a "." or ".." path segment is refused, encoded or not, before anything is 
 	assert.match(error?.message ?? '', /not a function name/i);
 	assert.equal(sent.length, 0);
 	// A dot inside a name is still a name.
-	await db.files.space('docs').download('a/..b/.c');
-	assert.equal(new URL(sent[0].url).pathname, '/v1/files/file/docs/a/..b/.c');
+	await db.files.space('papers').download('a/..b/.c');
+	assert.equal(new URL(sent[0].url).pathname, '/v1/files/file/papers/a/..b/.c');
 });

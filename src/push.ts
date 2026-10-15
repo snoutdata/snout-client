@@ -10,7 +10,7 @@
  *     await db.push.register({ transport: 'apns', token, environment: 'production' })
  *     // In a browser, with your service worker's registration:
  *     await db.push.subscribeWeb(registration)
- *     // On a server, with the service key (or as a user your policies allow):
+ *     // On a server, with the server key (or as a person your policies allow):
  *     await db.push.send({ notification: { title: 'Order shipped' }, userIds: [userId] })
  *
  * Devices, topics, the queue and the delivery log are tables in the project's own database, and
@@ -157,7 +157,7 @@ interface WebRegistration {
 }
 
 export class PushClient {
-	/** Setting and reading the project's own APNs and FCM keys. The service key only. */
+	/** Setting and reading the project's own APNs and FCM keys. The server key only. */
 	readonly credentials: {
 		set(kind: 'apns', body: { topic: string; keys: { p8: string; key_id: string; team_id: string; environment?: 'production' | 'sandbox' | null }[] }): Promise<PushResult<Record<string, unknown>>>;
 		set(kind: 'fcm', body: { service_account: string }): Promise<PushResult<Record<string, unknown>>>;

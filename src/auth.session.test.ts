@@ -28,7 +28,7 @@ function mapStorage(store: Map<string, string>) {
 function client(answer: (request: Sent) => { status?: number; body?: unknown }, storage?: Map<string, string>) {
 	const { fetch, sent } = fakeFetch(answer);
 	const store = storage ?? new Map<string, string>();
-	const db = snout(URL_, 'app-key', { global: { fetch }, auth: { autoRefreshToken: false, detectSessionInUrl: false, storage: mapStorage(store) } });
+	const db = snout(URL_, 'app-key', { vocabulary: 'old', global: { fetch }, auth: { autoRefreshToken: false, detectSessionInUrl: false, storage: mapStorage(store) } });
 	return { db, sent, store };
 }
 
@@ -71,7 +71,7 @@ test('an ID token is exchanged at grant_type=id_token and becomes the session', 
 
 test('getUser() with no session asks about the bearer the client was made with', async () => {
 	const { fetch, sent } = fakeFetch(() => ({ body: { id: 'u9' } }));
-	const asUser = snout(URL_, 'app-key', { global: { fetch, headers: { Authorization: 'Bearer user-jwt' } }, auth: { persistSession: false, autoRefreshToken: false } });
+	const asUser = snout(URL_, 'app-key', { vocabulary: 'old', global: { fetch, headers: { Authorization: 'Bearer user-jwt' } }, auth: { persistSession: false, autoRefreshToken: false } });
 	const { data, error } = await asUser.identity.currentPerson();
 	assert.equal(error, null);
 	assert.equal(data.user?.id, 'u9');
@@ -130,7 +130,7 @@ test('a session an older client saved (an older desktop, the same key) is used a
 		})
 	);
 	const { fetch, sent } = fakeFetch(() => ({ body: [] }));
-	const db = snout(URL_, 'app-key', {
+	const db = snout(URL_, 'app-key', { vocabulary: 'old',
 		global: { fetch },
 		auth: { autoRefreshToken: false, detectSessionInUrl: false, storageKey: 'positron-db-auth', storage: mapStorage(store) }
 	});
@@ -168,7 +168,7 @@ test('stopAutoRefresh holds a due refresh until startAutoRefresh, and debug says
 	const lines: string[] = [];
 	store.set('snoutdata-abc123-auth', JSON.stringify({ ...tokenBody('a1', 'r1'), expires_at: Math.floor(Date.now() / 1000) + 61 }));
 	const { fetch, sent } = fakeFetch(() => ({ status: 400, body: { error_code: 'refresh_token_not_found', msg: 'Invalid Refresh Token' } }));
-	const db = snout(URL_, 'app-key', {
+	const db = snout(URL_, 'app-key', { vocabulary: 'old',
 		global: { fetch },
 		auth: { autoRefreshToken: true, detectSessionInUrl: false, debug: (...parts) => lines.push(parts.join(' ')), storage: mapStorage(store) }
 	});
@@ -206,7 +206,7 @@ test('PKCE mode ignores #access_token in the URL and keeps the stored session (n
 	store.set('snoutdata-abc123-auth', JSON.stringify({ ...tokenBody(mine, 'r-mine'), expires_at: inAnHour() }));
 	await atUrl(`https://app.example.com/#access_token=${theirs}&refresh_token=r-theirs&expires_in=3600`, async (replaced) => {
 		const { fetch, sent } = fakeFetch(() => ({ body: { id: 'attacker', email: 'eve@example.com' } }));
-		const db = snout(URL_, 'app-key', { global: { fetch }, auth: { autoRefreshToken: false, detectSessionInUrl: true, flowType: 'pkce', storage: mapStorage(store) } });
+		const db = snout(URL_, 'app-key', { vocabulary: 'old', global: { fetch }, auth: { autoRefreshToken: false, detectSessionInUrl: true, flowType: 'pkce', storage: mapStorage(store) } });
 		const { data } = await db.identity.currentSession();
 		assert.equal(data.session?.access_token, mine);
 		assert.equal(sent.length, 0);
@@ -220,7 +220,7 @@ test('PKCE is the default flow, so a fragment is ignored without naming it', asy
 	await atUrl(`https://app.example.com/#access_token=${theirs}&refresh_token=r-theirs`, async () => {
 		const { fetch, sent } = fakeFetch(() => ({ body: { id: 'attacker' } }));
 		const store = new Map<string, string>();
-		const db = snout(URL_, 'app-key', { global: { fetch }, auth: { autoRefreshToken: false, detectSessionInUrl: true, storage: mapStorage(store) } });
+		const db = snout(URL_, 'app-key', { vocabulary: 'old', global: { fetch }, auth: { autoRefreshToken: false, detectSessionInUrl: true, storage: mapStorage(store) } });
 		const { data } = await db.identity.currentSession();
 		assert.equal(data.session, null);
 		assert.equal(sent.length, 0);
@@ -231,7 +231,7 @@ test('implicit mode still finishes a redirect from #access_token', async () => {
 	const access = jwt({ sub: 'u1', exp: inAnHour() });
 	await atUrl(`https://app.example.com/cb?x=1#access_token=${access}&refresh_token=r1&expires_in=3600`, async (replaced) => {
 		const { fetch, sent } = fakeFetch(() => ({ body: { id: 'u1', email: 'ada@example.com' } }));
-		const db = snout(URL_, 'app-key', { global: { fetch }, auth: { autoRefreshToken: false, detectSessionInUrl: true, flowType: 'implicit', storage: mapStorage(new Map()) } });
+		const db = snout(URL_, 'app-key', { vocabulary: 'old', global: { fetch }, auth: { autoRefreshToken: false, detectSessionInUrl: true, flowType: 'implicit', storage: mapStorage(new Map()) } });
 		const { data } = await db.identity.currentSession();
 		assert.equal(data.session?.access_token, access);
 		assert.equal(new URL(sent[0].url).pathname, '/v1/identity/person');

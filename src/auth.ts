@@ -4,18 +4,25 @@
  *--------------------------------------------------------------------------------------------*/
 
 /**
- * Auth: accounts, sessions and the token every other product sends.
+ * Identity: people, sessions and the token every other product sends.
  *
- * The auth server is at `/v1/identity`. A session is an access token (a short-lived JWT that
- * row-level security reads) plus a refresh token that buys the next one. This module keeps
- * the session, stores it where the caller said to (the browser's localStorage by default),
- * refreshes it before it expires, and tells every listener when it changes, which is how
- * realtime learns to re-authorise its channels.
+ * The identity server is at `/v1/identity` (`/v1/identity` in the old vocabulary). A session is an
+ * access token (a short-lived JWT that row-level security reads) plus a refresh token that buys
+ * the next one. This module keeps the session, stores it where the caller said to (the browser's
+ * localStorage by default), renews it before it expires, and tells every listener when it
+ * changes, which is how live learns to re-authorise its topics.
+ *
+ * The routes and fields it sends are the vocabulary's own (`/session?via=password` and
+ * `profile_data`, or `/token?grant_type=password` and `data`); a person and a session it hands
+ * back carry BOTH names for each renamed field (`person` and `user`, `profile_data` and
+ * `profile_data`, `server_data` and `server_data`), whichever the server sent, so code written
+ * against either reads them.
  */
 
-import { encodePath, isBrowser, joinUrl, messageOf, readBody, type Fetch } from './http.js';
+import { encodePath, isBrowser, joinUrl, keyHeader, messageOf, readBody, type Fetch, type Vocabulary } from './http.js';
 
-export interface User {
+/** One person's account, as the identity server describes it. */
+export interface Person {
 	id: string;
 	aud: string;
 	role?: string;
@@ -25,7 +32,13 @@ export interface User {
 	phone_confirmed_at?: string | null;
 	confirmed_at?: string | null;
 	last_sign_in_at?: string | null;
+	/** What the person may change about themselves (`changePerson({ profile_data })`). */
+	profile_data: Record<string, unknown>;
+	/** What only the server key may set (`operator.createUser({ server_data })`). */
 	server_data: Record<string, unknown>;
+	/** @deprecated Since 0.4.0: `server_data`, the same value. */
+	server_data: Record<string, unknown>;
+	/** @deprecated Since 0.4.0: `profile_data`, the same value. */
 	profile_data: Record<string, unknown>;
 	identities?: Record<string, unknown>[];
 	created_at: string;
@@ -34,6 +47,9 @@ export interface User {
 	[field: string]: unknown;
 }
 
+/** @deprecated Since 0.4.0: `Person`. */
+export type User = Person;
+
 export interface Session {
 	access_token: string;
 	refresh_token: string;
@@ -41,7 +57,9 @@ export interface Session {
 	expires_in: number;
 	/** Seconds since the epoch. */
 	expires_at: number;
-	user: User;
+	person: Person;
+	/** @deprecated Since 0.4.0: `person`, the same object. */
+	user: Person;
 	provider_token?: string | null;
 	provider_refresh_token?: string | null;
 }
@@ -67,6 +85,18 @@ export type AuthEvent =
 	| 'PASSWORD_RECOVERY';
 
 export type AuthResult<T> = { data: T; error: null } | { data: { [K in keyof T]: null }; error: AuthError };
+
+/** A result naming one person, under the new name and the old. */
+export interface PersonData {
+	person: Person | null;
+	/** @deprecated Since 0.4.0: `person`, the same object. */
+	user: Person | null;
+}
+
+/** A result naming a person and a session. */
+export interface SessionData extends PersonData {
+	session: Session | null;
+}
 
 /** Where a session is kept between page loads. `localStorage` fits; so does anything async. */
 export interface SessionStorage {
@@ -96,6 +126,59 @@ export interface AuthOptions {
 }
 
 type Listener = (event: AuthEvent, session: Session | null) => void;
+
+/** The identity server's routes, old then new. */
+const ROUTES = {
+	signup: ['signup', 'register'],
+	token: ['token', 'session'],
+	logout: ['logout', 'sign-off'],
+	user: ['user', 'person'],
+	recover: ['recover', 'reset'],
+	verify: ['verify', 'confirm'],
+	otp: ['otp', 'code'],
+	authorize: ['authorize', 'provider/start'],
+	sso: ['sso', 'sso/start'],
+	people: ['admin/users', 'operator/people']
+} as const;
+
+type Route = keyof typeof ROUTES;
+
+/** A `grant_type` whose `via` (new vocabulary) is another word; the rest keep their names. */
+const VIA: Record<string, string> = { refresh_token: 'renew' };
+
+/**
+ * A person as the server sent it, carrying each renamed field under both names, whichever it
+ * was sent under (an old server sends only the old ones, a new one both).
+ */
+export function toPerson(body: unknown): Person {
+	const raw = (body !== null && typeof body === 'object' ? body : {}) as Record<string, unknown>;
+	const profile = (raw.profile_data ?? raw.profile_data ?? {}) as Record<string, unknown>;
+	const server = (raw.server_data ?? raw.server_data ?? {}) as Record<string, unknown>;
+	return { ...raw, profile_data: profile, profile_data: profile, server_data: server, server_data: server } as Person;
+}
+
+/** A session with its person under both names, from one that may carry either (0.3.x stored only `user`). */
+function withPerson(session: Session): Session {
+	const person = toPerson(session.person ?? session.user);
+	return { ...session, person, user: person };
+}
+
+function personData(person: Person | null): PersonData {
+	return { person, user: person };
+}
+
+function sessionData(session: Session | null, person: Person | null = session?.person ?? null): SessionData {
+	return { person, user: person, session };
+}
+
+/** A fresh empty result each time, so no caller can change another's. */
+function noSession(): { person: null; user: null; session: null } {
+	return { person: null, user: null, session: null };
+}
+
+function noPerson(): { person: null; user: null } {
+	return { person: null, user: null };
+}
 
 /** Refresh this many seconds before expiry. */
 const REFRESH_MARGIN = 60;
@@ -154,11 +237,11 @@ function toSession(body: Record<string, unknown>): Session | null {
 		return null;
 	}
 	const expiresIn = typeof body.expires_in === 'number' ? body.expires_in : 3600;
-	return {
+	return withPerson({
 		...(body as unknown as Session),
 		expires_in: expiresIn,
 		expires_at: typeof body.expires_at === 'number' ? body.expires_at : nowSeconds() + expiresIn
-	};
+	});
 }
 
 export class AuthClient {
@@ -178,16 +261,52 @@ export class AuthClient {
 	/** Set by stopAutoRefresh and cleared by startAutoRefresh; a sign-in does not re-arm it. */
 	private paused = false;
 	private readonly debug: (...parts: unknown[]) => void;
-	/** A bearer the caller fixed in `global.headers`, used by `getUser()` when nobody is signed in. */
+	/** A bearer the caller fixed in `global.headers`, used by `currentPerson()` when nobody is signed in. */
 	private readonly fixedBearer: string | null;
 	private readonly ready: Promise<void>;
 
-	/** The admin half: managing other people's accounts. Needs the service key. */
+	/** The operator half: managing other people's accounts. Needs the server key. */
+	readonly operator: AuthAdmin;
+	/** @deprecated Since 0.4.0: `operator`, the same object. Removed in 0.5.0. */
 	readonly admin: AuthAdmin;
+	/** @internal Which names the wire speaks. */
+	readonly vocabulary: Vocabulary;
 
-	constructor(url: string, key: string, fetchImpl: Fetch, headers: Record<string, string>, ref: string, options: AuthOptions = {}) {
+	/** @deprecated Since 0.4.0: use `register()`, the same function. Removed in 0.5.0. */
+	declare signUp: AuthClient['register'];
+	/** @deprecated Since 0.4.0: use `passwordSignIn()`, the same function. Removed in 0.5.0. */
+	declare passwordSignIn: AuthClient['passwordSignIn'];
+	/** @deprecated Since 0.4.0: use `codeSignIn()`, the same function. Removed in 0.5.0. */
+	declare codeSignIn: AuthClient['codeSignIn'];
+	/** @deprecated Since 0.4.0: use `providerSignIn()`, the same function. Removed in 0.5.0. */
+	declare providerSignIn: AuthClient['providerSignIn'];
+	/** @deprecated Since 0.4.0: use `ssoSignIn()`, the same function. Removed in 0.5.0. */
+	declare ssoSignIn: AuthClient['ssoSignIn'];
+	/** @deprecated Since 0.4.0: use `guestSignIn()`, the same function. Removed in 0.5.0. */
+	declare guestSignIn: AuthClient['guestSignIn'];
+	/** @deprecated Since 0.4.0: use `confirmCode()`, the same function. Removed in 0.5.0. */
+	declare confirmCode: AuthClient['confirmCode'];
+	/** @deprecated Since 0.4.0: use `finishProviderSignIn()`, the same function. Removed in 0.5.0. */
+	declare finishProviderSignIn: AuthClient['finishProviderSignIn'];
+	/** @deprecated Since 0.4.0: use `signOff()`, the same function. Removed in 0.5.0. */
+	declare signOut: AuthClient['signOff'];
+	/** @deprecated Since 0.4.0: use `currentSession()`, the same function. Removed in 0.5.0. */
+	declare getSession: AuthClient['currentSession'];
+	/** @deprecated Since 0.4.0: use `currentPerson()`, the same function. Removed in 0.5.0. */
+	declare getUser: AuthClient['currentPerson'];
+	/** @deprecated Since 0.4.0: use `renew()`, the same function. Removed in 0.5.0. */
+	declare refreshSession: AuthClient['renew'];
+	/** @deprecated Since 0.4.0: use `onSessionChange()`, the same function. Removed in 0.5.0. */
+	declare onSessionChange: AuthClient['onSessionChange'];
+	/** @deprecated Since 0.4.0: use `sendReset()`, the same function. Removed in 0.5.0. */
+	declare sendReset: AuthClient['sendReset'];
+	/** @deprecated Since 0.4.0: use `changePerson()`, the same function. Removed in 0.5.0. */
+	declare updateUser: AuthClient['changePerson'];
+
+	constructor(url: string, key: string, fetchImpl: Fetch, headers: Record<string, string>, ref: string, options: AuthOptions = {}, vocabulary: Vocabulary = 'new') {
 		this.url = url;
 		this.key = key;
+		this.vocabulary = vocabulary;
 		this.fetch = fetchImpl;
 		this.headers = headers;
 		const browser = isBrowser();
@@ -200,11 +319,39 @@ export class AuthClient {
 		this.debug = options.debug ?? (() => undefined);
 		const authorization = Object.entries(headers).find(([name]) => name.toLowerCase() === 'authorization')?.[1];
 		this.fixedBearer = authorization?.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : null;
-		this.admin = new AuthAdmin(this);
+		this.operator = new AuthAdmin(this);
+		this.admin = this.operator;
 		this.ready = this.initialize(options.detectSessionInUrl ?? browser);
 	}
 
 	// ---- plumbing ----
+
+	/** @internal A route's path in this client's vocabulary, with `rest` after it. */
+	route(name: Route, rest = ''): string {
+		return `${ROUTES[name][this.vocabulary === 'old' ? 0 : 1]}${rest}`;
+	}
+
+	/** The query that asks the token route for `grant`: `grant_type=` (old) or `via=` (new). */
+	private grant(grant: string): Record<string, string> {
+		return this.vocabulary === 'old' ? { grant_type: grant } : { via: VIA[grant] ?? grant };
+	}
+
+	/**
+	 * @internal A person's data fields under this vocabulary's names: `profile_data` and
+	 * `server_data`, or the old `oldProfile` (`data` or `profile_data`) and `server_data`.
+	 * Absent ones are left out.
+	 */
+	fields(oldProfile: 'data' | 'profile_data', profile: unknown, server?: unknown): Record<string, unknown> {
+		const old = this.vocabulary === 'old';
+		const out: Record<string, unknown> = {};
+		if (profile !== undefined) {
+			out[old ? oldProfile : 'profile_data'] = profile;
+		}
+		if (server !== undefined) {
+			out[old ? 'server_data' : 'server_data'] = server;
+		}
+		return out;
+	}
 
 	/** @internal */
 	async call(path: string, init: { method?: string; body?: unknown; token?: string; query?: Record<string, string | undefined> } = {}): Promise<{ body: Record<string, unknown>; error: AuthError | null }> {
@@ -216,7 +363,7 @@ export class AuthClient {
 		}
 		const headers: Record<string, string> = {
 			...this.headers,
-			apikey: this.key,
+			[keyHeader(this.vocabulary)]: this.key,
 			Authorization: `Bearer ${init.token ?? this.key}`
 		};
 		if (init.body !== undefined) {
@@ -255,7 +402,7 @@ export class AuthClient {
 		try {
 			const parsed = JSON.parse(stored) as Session;
 			if (typeof parsed?.access_token === 'string' && typeof parsed.refresh_token === 'string' && typeof parsed.expires_at === 'number') {
-				return parsed;
+				return withPerson(parsed);
 			}
 		} catch {
 			// fall through to clearing it
@@ -282,7 +429,7 @@ export class AuthClient {
 		if (!stored) {
 			this.debug('session removed from storage elsewhere: signed out');
 			this.emit('SIGNED_OUT');
-		} else if (current && stored.user?.id === current.user?.id) {
+		} else if (current && stored.person?.id === current.person?.id) {
 			this.debug('session refreshed elsewhere: adopted from storage');
 			this.emit('TOKEN_REFRESHED');
 		} else {
@@ -328,18 +475,20 @@ export class AuthClient {
 		const accessToken = hash.get('access_token');
 		const refreshToken = hash.get('refresh_token');
 		if (accessToken && refreshToken) {
-			const { body, error } = await this.call('user', { token: accessToken });
+			const { body, error } = await this.call(this.route('user'), { token: accessToken });
 			if (error) {
 				return;
 			}
 			const expiresIn = Number(hash.get('expires_in') ?? 3600);
+			const person = toPerson(body);
 			await this.save({
 				access_token: accessToken,
 				refresh_token: refreshToken,
 				token_type: hash.get('token_type') ?? 'bearer',
 				expires_in: expiresIn,
 				expires_at: Number(hash.get('expires_at') ?? nowSeconds() + expiresIn),
-				user: body as unknown as User,
+				person,
+				user: person,
 				provider_token: hash.get('provider_token'),
 				provider_refresh_token: hash.get('provider_refresh_token')
 			}, hash.get('type') === 'recovery' ? 'PASSWORD_RECOVERY' : 'SIGNED_IN');
@@ -399,7 +548,7 @@ export class AuthClient {
 					}
 					refreshToken = current.refresh_token;
 				}
-				const { body, error } = await this.call('token', { query: { grant_type: 'refresh_token' }, body: { refresh_token: refreshToken } });
+				const { body, error } = await this.call(this.route('token'), { query: this.grant('refresh_token'), body: { refresh_token: refreshToken } });
 				const session = error ? null : toSession(body);
 				if (session) {
 					this.debug('token refreshed');
@@ -419,30 +568,29 @@ export class AuthClient {
 		return this.refreshing;
 	}
 
-	private async signedIn(body: Record<string, unknown>, error: AuthError | null): Promise<AuthResult<{ user: User | null; session: Session | null }>> {
+	private async signedIn(body: Record<string, unknown>, error: AuthError | null): Promise<AuthResult<SessionData>> {
 		if (error) {
-			return { data: { user: null, session: null }, error };
+			return { data: noSession(), error };
 		}
 		const session = toSession(body);
 		if (session) {
 			await this.save(session, 'SIGNED_IN');
-			return { data: { user: session.user, session }, error: null };
+			return { data: sessionData(session), error: null };
 		}
-		// Signed up but not signed in: the address has to be confirmed first.
-		const user = (body.user ?? body) as User;
-		return { data: { user, session: null }, error: null };
+		// Registered but not signed in: the address has to be confirmed first.
+		return { data: sessionData(null, toPerson(body.person ?? body.user ?? body)), error: null };
 	}
 
 	// ---- the session ----
 
 	/** The token to send as `Authorization`: the session's, or the project key when signed out. */
 	async getAccessToken(): Promise<string> {
-		const { data } = await this.getSession();
+		const { data } = await this.currentSession();
 		return data.session?.access_token ?? this.key;
 	}
 
-	/** The current session, refreshed first if it has expired. Read locally, not verified. */
-	async getSession(): Promise<AuthResult<{ session: Session | null }>> {
+	/** The current session, renewed first if it has expired. Read locally, not verified. */
+	async currentSession(): Promise<AuthResult<{ session: Session | null }>> {
 		await this.ready;
 		await this.syncFromStorage();
 		if (this.session &&this.session.expires_at - REFRESH_MARGIN <= nowSeconds()) {
@@ -451,52 +599,52 @@ export class AuthClient {
 		return { data: { session: this.session }, error: null };
 	}
 
-	/** The signed-in user, as the auth server says it is now. Use this, not the session, to decide. */
-	async getUser(jwt?: string): Promise<AuthResult<{ user: User | null }>> {
-		// A server client made to BE a user (`global.headers.Authorization`) asks about that user.
-		const token = jwt ?? (await this.getSession()).data.session?.access_token ?? this.fixedBearer ?? undefined;
+	/** The signed-in person, as the identity server says it is now. Use this, not the session, to decide. */
+	async currentPerson(jwt?: string): Promise<AuthResult<PersonData>> {
+		// A server client made to BE a person (`global.headers.Authorization`) asks about that person.
+		const token = jwt ?? (await this.currentSession()).data.session?.access_token ?? this.fixedBearer ?? undefined;
 		if (!token) {
-			return { data: { user: null }, error: new AuthError('Auth session missing', 400, 'session_not_found') };
+			return { data: noPerson(), error: new AuthError('Auth session missing', 400, 'session_not_found') };
 		}
-		const { body, error } = await this.call('user', { token });
-		return error ? { data: { user: null }, error } : { data: { user: body as unknown as User }, error: null };
+		const { body, error } = await this.call(this.route('user'), { token });
+		return error ? { data: noPerson(), error } : { data: personData(toPerson(body)), error: null };
 	}
 
 	/** Adopt a session obtained elsewhere (a server, another tab). */
-	async setSession(tokens: { access_token: string; refresh_token: string }): Promise<AuthResult<{ user: User | null; session: Session | null }>> {
+	async setSession(tokens: { access_token: string; refresh_token: string }): Promise<AuthResult<SessionData>> {
 		await this.ready;
-		const { body, error } = await this.call('user', { token: tokens.access_token });
+		const { body, error } = await this.call(this.route('user'), { token: tokens.access_token });
 		if (error) {
 			const refreshed = await this.refresh(tokens.refresh_token);
-			return refreshed
-				? { data: { user: refreshed.user, session: refreshed }, error: null }
-				: { data: { user: null, session: null }, error };
+			return refreshed ? { data: sessionData(refreshed), error: null } : { data: noSession(), error };
 		}
 		const payload = JSON.parse(atob(tokens.access_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))) as { exp?: number };
 		const expiresAt = payload.exp ?? nowSeconds() + 3600;
+		const person = toPerson(body);
 		const session: Session = {
 			access_token: tokens.access_token,
 			refresh_token: tokens.refresh_token,
 			token_type: 'bearer',
 			expires_in: expiresAt - nowSeconds(),
 			expires_at: expiresAt,
-			user: body as unknown as User
+			person,
+			user: person
 		};
 		await this.save(session, 'SIGNED_IN');
-		return { data: { user: session.user, session }, error: null };
+		return { data: sessionData(session), error: null };
 	}
 
-	/** Force a refresh now, with the stored refresh token or the one given. */
-	async refreshSession(current?: { refresh_token: string }): Promise<AuthResult<{ user: User | null; session: Session | null }>> {
+	/** Renew now, with the stored refresh token or the one given. */
+	async renew(current?: { refresh_token: string }): Promise<AuthResult<SessionData>> {
 		await this.ready;
 		const refreshToken = current?.refresh_token ?? this.session?.refresh_token;
 		if (!refreshToken) {
-			return { data: { user: null, session: null }, error: new AuthError('Auth session missing', 400, 'session_not_found') };
+			return { data: noSession(), error: new AuthError('Auth session missing', 400, 'session_not_found') };
 		}
 		const session = await this.refresh(refreshToken);
 		return session
-			? { data: { user: session.user, session }, error: null }
-			: { data: { user: null, session: null }, error: new AuthError('The session could not be refreshed', 401, 'refresh_token_not_found') };
+			? { data: sessionData(session), error: null }
+			: { data: noSession(), error: new AuthError('The session could not be refreshed', 401, 'refresh_token_not_found') };
 	}
 
 	/** Called with every change of session. Returns the handle that stops it. */
@@ -515,37 +663,53 @@ export class AuthClient {
 
 	// `captchaToken`, here and on the other sign-in calls, is accepted so code that passes one
 	// still compiles, and is not sent: SnoutData's auth server has no captcha.
-	async signUp(credentials: {
+	/** A new account. `options.profile_data` (`options.data` before 0.4.0) is the person's own data. */
+	async register(credentials: {
 		email?: string;
 		phone?: string;
 		password: string;
-		options?: { data?: Record<string, unknown>; emailRedirectTo?: string; captchaToken?: string };
-	}): Promise<AuthResult<{ user: User | null; session: Session | null }>> {
+		options?: {
+			profile_data?: Record<string, unknown>;
+			/** @deprecated Since 0.4.0: `profile_data`. */
+			data?: Record<string, unknown>;
+			emailRedirectTo?: string;
+			captchaToken?: string;
+		};
+	}): Promise<AuthResult<SessionData>> {
 		await this.ready;
 		const { email, phone, password, options = {} } = credentials;
-		const { body, error } = await this.call('signup', {
+		const { body, error } = await this.call(this.route('signup'), {
 			query: { redirect_to: options.emailRedirectTo },
-			body: { email, phone, password, data: options.data ?? {} }
+			body: { email, phone, password, ...this.fields('data', options.profile_data ?? options.data ?? {}) }
 		});
 		return this.signedIn(body, error);
 	}
 
-	async passwordSignIn(credentials: { email?: string; phone?: string; password: string }): Promise<AuthResult<{ user: User | null; session: Session | null }>> {
+	async passwordSignIn(credentials: { email?: string; phone?: string; password: string }): Promise<AuthResult<SessionData>> {
 		await this.ready;
-		const { body, error } = await this.call('token', { query: { grant_type: 'password' }, body: credentials });
+		const { body, error } = await this.call(this.route('token'), { query: this.grant('password'), body: credentials });
 		return this.signedIn(body, error);
 	}
 
 	/**
-	 * An account with no email or password, which can be upgraded later with `updateUser`. The
-	 * metadata goes in `options.data`, as `signUp` takes it; a bare `data` is still read, since
-	 * 0.3.1 and earlier took it there.
+	 * An account with no email or password, which can be upgraded later with `changePerson`. The
+	 * person's data goes in `options.profile_data`, as `register` takes it; `options.data` and a
+	 * bare `data` are still read, since 0.3.x and earlier took it there.
 	 */
 	async guestSignIn(
-		credentials: { options?: { data?: Record<string, unknown> }; data?: Record<string, unknown> } = {}
-	): Promise<AuthResult<{ user: User | null; session: Session | null }>> {
+		credentials: {
+			options?: {
+				profile_data?: Record<string, unknown>;
+				/** @deprecated Since 0.4.0: `profile_data`. */
+				data?: Record<string, unknown>;
+			};
+			/** @deprecated Since 0.3.2: `options.profile_data`. */
+			data?: Record<string, unknown>;
+		} = {}
+	): Promise<AuthResult<SessionData>> {
 		await this.ready;
-		const { body, error } = await this.call('signup', { body: { data: credentials.options?.data ?? credentials.data ?? {} } });
+		const profile = credentials.options?.profile_data ?? credentials.options?.data ?? credentials.data ?? {};
+		const { body, error } = await this.call(this.route('signup'), { body: this.fields('data', profile) });
 		return this.signedIn(body, error);
 	}
 
@@ -553,38 +717,46 @@ export class AuthClient {
 	async codeSignIn(credentials: {
 		email?: string;
 		phone?: string;
-		options?: { emailRedirectTo?: string; shouldCreateUser?: boolean; data?: Record<string, unknown>; channel?: 'sms' | 'whatsapp' };
-	}): Promise<AuthResult<{ user: null; session: null }>> {
+		options?: {
+			emailRedirectTo?: string;
+			shouldCreateUser?: boolean;
+			profile_data?: Record<string, unknown>;
+			/** @deprecated Since 0.4.0: `profile_data`. */
+			data?: Record<string, unknown>;
+			channel?: 'sms' | 'whatsapp';
+		};
+	}): Promise<AuthResult<{ person: null; user: null; session: null }>> {
 		await this.ready;
 		const { email, phone, options = {} } = credentials;
 		let challenge: string | undefined;
 		if (email && this.flowType === 'pkce') {
 			challenge = await this.startPkce();
 		}
-		const { error } = await this.call('otp', {
+		const { error } = await this.call(this.route('otp'), {
 			query: { redirect_to: options.emailRedirectTo },
 			body: {
 				email,
 				phone,
-				data: options.data ?? {},
+				...this.fields('data', options.profile_data ?? options.data ?? {}),
 				create_user: options.shouldCreateUser ?? true,
 				channel: options.channel,
 				code_challenge: challenge,
 				code_challenge_method: challenge ? 's256' : undefined
 			}
 		});
-		return error ? { data: { user: null, session: null }, error } : { data: { user: null, session: null }, error: null };
+		return { data: noSession(), error };
 	}
 
+	/** Confirms a one-time code, or a link's token hash, which signs in. */
 	async confirmCode(params: {
 		email?: string;
 		phone?: string;
 		token?: string;
 		token_hash?: string;
 		type: 'signup' | 'invite' | 'magiclink' | 'recovery' | 'email_change' | 'email' | 'sms' | 'phone_change';
-	}): Promise<AuthResult<{ user: User | null; session: Session | null }>> {
+	}): Promise<AuthResult<SessionData>> {
 		await this.ready;
-		const { body, error } = await this.call('verify', { body: params });
+		const { body, error } = await this.call(this.route('verify'), { body: params });
 		const result = await this.signedIn(body, error);
 		if (!result.error && params.type === 'recovery') {
 			this.emit('PASSWORD_RECOVERY');
@@ -602,7 +774,7 @@ export class AuthClient {
 	}): Promise<AuthResult<{ provider: string; url: string }>> {
 		await this.ready;
 		const options = credentials.options ?? {};
-		const url = new URL(joinUrl(this.url, 'authorize'));
+		const url = new URL(joinUrl(this.url, this.route('authorize')));
 		url.searchParams.set('provider', credentials.provider);
 		if (options.redirectTo) {
 			url.searchParams.set('redirect_to', options.redirectTo);
@@ -633,11 +805,11 @@ export class AuthClient {
 		access_token?: string;
 		nonce?: string;
 		options?: { captchaToken?: string };
-	}): Promise<AuthResult<{ user: User | null; session: Session | null }>> {
+	}): Promise<AuthResult<SessionData>> {
 		await this.ready;
 		const { provider, token, access_token, nonce } = credentials;
-		const { body, error } = await this.call('token', {
-			query: { grant_type: 'id_token' },
+		const { body, error } = await this.call(this.route('token'), {
+			query: this.grant('id_token'),
 			body: { provider, id_token: token, access_token, nonce }
 		});
 		return this.signedIn(body, error);
@@ -657,7 +829,7 @@ export class AuthClient {
 		if (this.flowType === 'pkce') {
 			challenge = await this.startPkce();
 		}
-		const { body, error } = await this.call('sso', {
+		const { body, error } = await this.call(this.route('sso'), {
 			body: {
 				...('providerId' in params ? { provider_id: params.providerId } : { domain: params.domain }),
 				redirect_to: options.redirectTo,
@@ -680,14 +852,14 @@ export class AuthClient {
 		return { data: { url }, error: null };
 	}
 
-	/** Finishes a PKCE sign-in with the `code` the redirect carried. */
-	async finishProviderSignIn(code: string): Promise<AuthResult<{ user: User | null; session: Session | null }>> {
+	/** Finishes a PKCE sign-in (a provider's, a link's, SSO's) with the `code` the redirect carried. */
+	async finishProviderSignIn(code: string): Promise<AuthResult<SessionData>> {
 		const key = `${this.storageKey}-code-verifier`;
 		const verifier = readVerifier(await this.storage.getItem(key));
 		if (!verifier) {
-			return { data: { user: null, session: null }, error: new AuthError('No code verifier is stored for this sign-in', 400, 'pkce_verifier_missing') };
+			return { data: noSession(), error: new AuthError('No code verifier is stored for this sign-in', 400, 'pkce_verifier_missing') };
 		}
-		const { body, error } = await this.call('token', { query: { grant_type: 'pkce' }, body: { auth_code: code, code_verifier: verifier } });
+		const { body, error } = await this.call(this.route('token'), { query: this.grant('pkce'), body: { auth_code: code, code_verifier: verifier } });
 		await this.storage.removeItem(key);
 		return this.signedIn(body, error);
 	}
@@ -702,12 +874,12 @@ export class AuthClient {
 	}
 
 	/** Ends the session here (`local`), everywhere (`global`) or everywhere else (`others`). */
-	async signOut(options: { scope?: 'global' | 'local' | 'others' } = {}): Promise<{ error: AuthError | null }> {
+	async signOff(options: { scope?: 'global' | 'local' | 'others' } = {}): Promise<{ error: AuthError | null }> {
 		await this.ready;
 		const scope = options.scope ?? 'global';
 		const token = this.session?.access_token;
 		if (token) {
-			const { error } = await this.call('logout', { method: 'POST', token, query: { scope } });
+			const { error } = await this.call(this.route('logout'), { method: 'POST', token, query: { scope } });
 			// A token the server no longer knows is as signed out as it gets.
 			if (error && error.status !== 401 && error.status !== 403 && error.status !== 404) {
 				return { error };
@@ -722,13 +894,14 @@ export class AuthClient {
 
 	// ---- the account ----
 
+	/** Mails a password reset link to `email`. */
 	async sendReset(email: string, options: { redirectTo?: string; captchaToken?: string } = {}): Promise<{ data: Record<string, never>; error: AuthError | null }> {
 		await this.ready;
 		let challenge: string | undefined;
 		if (this.flowType === 'pkce') {
 			challenge = await this.startPkce();
 		}
-		const { error } = await this.call('recover', {
+		const { error } = await this.call(this.route('recover'), {
 			query: { redirect_to: options.redirectTo },
 			body: {
 				email,
@@ -739,27 +912,36 @@ export class AuthClient {
 		return { data: {}, error };
 	}
 
-	/** Changes the signed-in user's email, phone, password or metadata. */
-	async updateUser(
-		attributes: { email?: string; phone?: string; password?: string; nonce?: string; data?: Record<string, unknown> },
+	/** Changes the signed-in person's email, phone, password or `profile_data`. */
+	async changePerson(
+		attributes: {
+			email?: string;
+			phone?: string;
+			password?: string;
+			nonce?: string;
+			profile_data?: Record<string, unknown>;
+			/** @deprecated Since 0.4.0: `profile_data`. */
+			data?: Record<string, unknown>;
+		},
 		options: { emailRedirectTo?: string } = {}
-	): Promise<AuthResult<{ user: User | null }>> {
-		const { data } = await this.getSession();
+	): Promise<AuthResult<PersonData>> {
+		const { data } = await this.currentSession();
 		if (!data.session) {
-			return { data: { user: null }, error: new AuthError('Auth session missing', 400, 'session_not_found') };
+			return { data: noPerson(), error: new AuthError('Auth session missing', 400, 'session_not_found') };
 		}
-		const { body, error } = await this.call('user', {
+		const { profile_data, data: oldData, ...rest } = attributes;
+		const { body, error } = await this.call(this.route('user'), {
 			method: 'PUT',
 			token: data.session.access_token,
 			query: { redirect_to: options.emailRedirectTo },
-			body: attributes
+			body: { ...rest, ...this.fields('data', profile_data ?? oldData) }
 		});
 		if (error) {
-			return { data: { user: null }, error };
+			return { data: noPerson(), error };
 		}
-		const user = body as unknown as User;
-		await this.save({ ...data.session, user }, 'USER_UPDATED');
-		return { data: { user }, error: null };
+		const person = toPerson(body);
+		await this.save({ ...data.session, person, user: person }, 'USER_UPDATED');
+		return { data: personData(person), error: null };
 	}
 
 	/** Re-sends a confirmation or change email, or a code. */
@@ -799,10 +981,14 @@ export interface GenerateLinkProperties {
 	verification_type: string;
 }
 
-/** Account management with the service key. Never ship that key to a browser. */
+/** Account management with the server key. Never ship that key to a browser. */
 export class AuthAdmin {
 	constructor(private readonly auth: AuthClient) {}
 
+	/**
+	 * A new account. `profile_data` is the person's own data, `server_data` what only the server
+	 * key sets (`profile_data` and `server_data` before 0.4.0).
+	 */
 	async createUser(attributes: {
 		email?: string;
 		phone?: string;
@@ -811,44 +997,62 @@ export class AuthAdmin {
 		phone_confirm?: boolean;
 		profile_data?: Record<string, unknown>;
 		server_data?: Record<string, unknown>;
+		/** @deprecated Since 0.4.0: `profile_data`. */
+		profile_data?: Record<string, unknown>;
+		/** @deprecated Since 0.4.0: `server_data`. */
+		server_data?: Record<string, unknown>;
 		ban_duration?: string;
-	}): Promise<AuthResult<{ user: User | null }>> {
-		const { body, error } = await this.auth.call('admin/users', { body: attributes });
-		return error ? { data: { user: null }, error } : { data: { user: body as unknown as User }, error: null };
+	}): Promise<AuthResult<PersonData>> {
+		const { body, error } = await this.auth.call(this.auth.route('people'), { body: this.speak(attributes) });
+		return error ? { data: noPerson(), error } : { data: personData(toPerson(body)), error: null };
 	}
 
-	async listUsers(params: { page?: number; perPage?: number } = {}): Promise<AuthResult<{ users: User[] }>> {
-		const { body, error } = await this.auth.call('admin/users', {
+	/** A page of accounts, as `people` (and `users`, its 0.3.x name). */
+	async listUsers(params: { page?: number; perPage?: number } = {}): Promise<AuthResult<{ people: Person[]; /** @deprecated Since 0.4.0: `people`. */ users: Person[] }>> {
+		const { body, error } = await this.auth.call(this.auth.route('people'), {
 			query: { page: params.page?.toString(), per_page: params.perPage?.toString() }
 		});
-		return error ? { data: { users: null }, error } : { data: { users: (body.users ?? []) as User[] }, error: null };
+		if (error) {
+			return { data: { people: null, users: null }, error };
+		}
+		const people = ((body.people ?? body.users ?? []) as unknown[]).map(toPerson);
+		return { data: { people, users: people }, error: null };
 	}
 
-	async getUserById(id: string): Promise<AuthResult<{ user: User | null }>> {
-		const { body, error } = await this.auth.call(`admin/users/${encodePath(id)}`);
-		return error ? { data: { user: null }, error } : { data: { user: body as unknown as User }, error: null };
+	async getUserById(id: string): Promise<AuthResult<PersonData>> {
+		const { body, error } = await this.auth.call(this.auth.route('people', `/${encodePath(id)}`));
+		return error ? { data: noPerson(), error } : { data: personData(toPerson(body)), error: null };
 	}
 
-	async updateUserById(id: string, attributes: Record<string, unknown>): Promise<AuthResult<{ user: User | null }>> {
-		const { body, error } = await this.auth.call(`admin/users/${encodePath(id)}`, { method: 'PUT', body: attributes });
-		return error ? { data: { user: null }, error } : { data: { user: body as unknown as User }, error: null };
+	/** Changes any of `createUser`'s attributes, under either name. */
+	async updateUserById(id: string, attributes: Record<string, unknown>): Promise<AuthResult<PersonData>> {
+		const { body, error } = await this.auth.call(this.auth.route('people', `/${encodePath(id)}`), { method: 'PUT', body: this.speak(attributes) });
+		return error ? { data: noPerson(), error } : { data: personData(toPerson(body)), error: null };
 	}
 
 	/** `shouldSoftDelete` keeps the row and scrubs it, so foreign keys to it still hold. */
-	async deleteUser(id: string, shouldSoftDelete = false): Promise<AuthResult<{ user: User | null }>> {
-		const { body, error } = await this.auth.call(`admin/users/${encodePath(id)}`, {
+	async deleteUser(id: string, shouldSoftDelete = false): Promise<AuthResult<PersonData>> {
+		const { body, error } = await this.auth.call(this.auth.route('people', `/${encodePath(id)}`), {
 			method: 'DELETE',
 			body: { should_soft_delete: shouldSoftDelete }
 		});
-		return error ? { data: { user: null }, error } : { data: { user: body as unknown as User }, error: null };
+		return error ? { data: noPerson(), error } : { data: personData(toPerson(body)), error: null };
 	}
 
-	async inviteUserByEmail(email: string, options: { data?: Record<string, unknown>; redirectTo?: string } = {}): Promise<AuthResult<{ user: User | null }>> {
+	async inviteUserByEmail(
+		email: string,
+		options: {
+			profile_data?: Record<string, unknown>;
+			/** @deprecated Since 0.4.0: `profile_data`. */
+			data?: Record<string, unknown>;
+			redirectTo?: string;
+		} = {}
+	): Promise<AuthResult<PersonData>> {
 		const { body, error } = await this.auth.call('invite', {
 			query: { redirect_to: options.redirectTo },
-			body: { email, data: options.data ?? {} }
+			body: { email, ...this.auth.fields('data', options.profile_data ?? options.data ?? {}) }
 		});
-		return error ? { data: { user: null }, error } : { data: { user: body as unknown as User }, error: null };
+		return error ? { data: noPerson(), error } : { data: personData(toPerson(body)), error: null };
 	}
 
 	/** A sign-in, invite or recovery link, returned instead of emailed. */
@@ -857,19 +1061,49 @@ export class AuthAdmin {
 		email: string;
 		password?: string;
 		newEmail?: string;
-		options?: { data?: Record<string, unknown>; redirectTo?: string };
-	}): Promise<AuthResult<{ properties: GenerateLinkProperties; user: User }>> {
+		options?: {
+			profile_data?: Record<string, unknown>;
+			/** @deprecated Since 0.4.0: `profile_data`. */
+			data?: Record<string, unknown>;
+			redirectTo?: string;
+		};
+	}): Promise<AuthResult<{ properties: GenerateLinkProperties; person: Person; /** @deprecated Since 0.4.0: `person`. */ user: Person }>> {
 		const { options, newEmail, ...rest } = params;
 		const { body, error } = await this.auth.call('admin/generate_link', {
-			body: { ...rest, new_email: newEmail, data: options?.data, redirect_to: options?.redirectTo }
+			body: { ...rest, new_email: newEmail, ...this.auth.fields('data', options?.profile_data ?? options?.data), redirect_to: options?.redirectTo }
 		});
 		if (error) {
-			return { data: { properties: null, user: null }, error };
+			return { data: { properties: null, person: null, user: null }, error };
 		}
 		const { action_link, email_otp, hashed_token, redirect_to, verification_type, ...user } = body;
+		const person = toPerson(user);
 		return {
-			data: { properties: { action_link, email_otp, hashed_token, redirect_to, verification_type } as GenerateLinkProperties, user: user as unknown as User },
+			data: { properties: { action_link, email_otp, hashed_token, redirect_to, verification_type } as GenerateLinkProperties, person, user: person },
 			error: null
 		};
 	}
+
+	/** Attributes with the person's data fields under the vocabulary's names, the new one winning when both are given. */
+	private speak(attributes: Record<string, unknown>): Record<string, unknown> {
+		const { profile_data, server_data, profile_data, server_data, ...rest } = attributes;
+		return { ...rest, ...this.auth.fields('profile_data', profile_data ?? profile_data, server_data ?? server_data) };
+	}
 }
+
+// The 0.3.x names, each the same function as its new one, kept for 0.4.x.
+
+AuthClient.prototype.signUp = AuthClient.prototype.register;
+AuthClient.prototype.passwordSignIn = AuthClient.prototype.passwordSignIn;
+AuthClient.prototype.codeSignIn = AuthClient.prototype.codeSignIn;
+AuthClient.prototype.providerSignIn = AuthClient.prototype.providerSignIn;
+AuthClient.prototype.ssoSignIn = AuthClient.prototype.ssoSignIn;
+AuthClient.prototype.guestSignIn = AuthClient.prototype.guestSignIn;
+AuthClient.prototype.confirmCode = AuthClient.prototype.confirmCode;
+AuthClient.prototype.finishProviderSignIn = AuthClient.prototype.finishProviderSignIn;
+AuthClient.prototype.signOut = AuthClient.prototype.signOff;
+AuthClient.prototype.getSession = AuthClient.prototype.currentSession;
+AuthClient.prototype.getUser = AuthClient.prototype.currentPerson;
+AuthClient.prototype.refreshSession = AuthClient.prototype.renew;
+AuthClient.prototype.onSessionChange = AuthClient.prototype.onSessionChange;
+AuthClient.prototype.sendReset = AuthClient.prototype.sendReset;
+AuthClient.prototype.updateUser = AuthClient.prototype.changePerson;

@@ -4,10 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 /**
- * The data API: a query builder over PostgREST at `/v1/data`.
+ * The data API: a query builder over PostgREST at `/v1/data` (`/v1/data` in the old vocabulary).
  *
  * A builder is a description of one request, and awaiting it sends it. Nothing is sent by
- * `select()` or `eq()`; they only add to the URL, which is why a builder can be passed
+ * `read()` or `eq()`; they only add to the URL, which is why a builder can be passed
  * around, extended and awaited later. Every result is `{ data, error, count, status }`, and
  * a refusal is an `error` rather than a throw, unless `throwOnError()` asks for a throw.
  */
@@ -90,8 +90,8 @@ export type FilterOperator =
  * typed by what was asked for.
  */
 /**
- * `W` is the row a `select()` after a write returns: the table's row for `insert`, `update`,
- * `upsert` and `delete`, whose own result is `null` until `select()` asks for the rows.
+ * `W` is the row a `read()` after a write returns: the table's row for `add`, `change`, `put`
+ * and `remove`, whose own result is `null` until `read()` asks for the rows.
  */
 export class QueryBuilder<T, W = T extends readonly (infer E)[] ? E : T> implements PromiseLike<QueryResult<T>> {
 	protected readonly state: State;
@@ -99,6 +99,9 @@ export class QueryBuilder<T, W = T extends readonly (infer E)[] ? E : T> impleme
 	constructor(state: State) {
 		this.state = state;
 	}
+
+	/** @deprecated Since 0.4.0: use `read()`, the same function. Removed in 0.5.0. */
+	declare select: QueryBuilder<T, W>['read'];
 
 	// ---- filters ----
 
@@ -241,10 +244,10 @@ export class QueryBuilder<T, W = T extends readonly (infer E)[] ? E : T> impleme
 	// ---- modifiers ----
 
 	/**
-	 * After `insert`/`update`/`upsert`/`delete`, return the affected rows (and only these
-	 * columns). Without it a write returns no rows, which is cheaper.
+	 * After `add`/`change`/`put`/`remove`, return the affected rows (and only these columns).
+	 * Without it a write returns no rows, which is cheaper.
 	 */
-	select<R = W>(columns = '*'): QueryBuilder<R[]> {
+	read<R = W>(columns = '*'): QueryBuilder<R[]> {
 		this.state.url.searchParams.set('select', cleanColumns(columns));
 		this.state.prefer.set('return', 'representation');
 		return this as unknown as QueryBuilder<R[]>;
@@ -420,13 +423,24 @@ export interface WriteOptions {
 	count?: CountMethod;
 }
 
-/** What `from(table)` returns: the choice of verb. */
+/** What `table(name)` returns: the choice of verb. */
 export class TableBuilder<R> {
 	constructor(
 		private readonly transport: Transport,
 		private readonly url: string,
 		private readonly schema: string | undefined
 	) {}
+
+	/** @deprecated Since 0.4.0: use `read()`, the same function. Removed in 0.5.0. */
+	declare select: TableBuilder<R>['read'];
+	/** @deprecated Since 0.4.0: use `add()`, the same function. Removed in 0.5.0. */
+	declare insert: TableBuilder<R>['add'];
+	/** @deprecated Since 0.4.0: use `put()`, the same function. Removed in 0.5.0. */
+	declare upsert: TableBuilder<R>['put'];
+	/** @deprecated Since 0.4.0: use `change()`, the same function. Removed in 0.5.0. */
+	declare update: TableBuilder<R>['change'];
+	/** @deprecated Since 0.4.0: use `remove()`, the same function. Removed in 0.5.0. */
+	declare delete: TableBuilder<R>['remove'];
 
 	private start<T>(method: Method, body?: unknown): QueryBuilder<T, R> {
 		return new QueryBuilder<T, R>({
@@ -444,7 +458,7 @@ export class TableBuilder<R> {
 	}
 
 	/** Read. `head: true` sends no rows back, which with `count` is how to count cheaply. */
-	select<T = R>(columns = '*', options: { count?: CountMethod; head?: boolean } = {}): QueryBuilder<T[]> {
+	read<T = R>(columns = '*', options: { count?: CountMethod; head?: boolean } = {}): QueryBuilder<T[]> {
 		const builder = this.start<T[]>(options.head ? 'HEAD' : 'GET');
 		builder['state'].url.searchParams.set('select', cleanColumns(columns));
 		if (options.count) {
@@ -453,8 +467,8 @@ export class TableBuilder<R> {
 		return builder;
 	}
 
-	/** One row or many. Returns nothing unless followed by `.select()`. */
-	insert(values: Partial<R> | readonly Partial<R>[], options: WriteOptions & { defaultToNull?: boolean } = {}): QueryBuilder<null, R> {
+	/** Add one row or many. Returns nothing unless followed by `.read()`. */
+	add(values: Partial<R> | readonly Partial<R>[], options: WriteOptions & { defaultToNull?: boolean } = {}): QueryBuilder<null, R> {
 		const builder = this.start<null>('POST', values);
 		withCount(builder, options.count);
 		if (Array.isArray(values)) {
@@ -467,10 +481,10 @@ export class TableBuilder<R> {
 	}
 
 	/**
-	 * Insert, or update on a conflict. `onConflict` names the unique columns to match on
+	 * Add, or change on a conflict (an upsert). `onConflict` names the unique columns to match on
 	 * (the primary key when omitted); `ignoreDuplicates` keeps the existing row instead.
 	 */
-	upsert(
+	put(
 		values: Partial<R> | readonly Partial<R>[],
 		options: WriteOptions & { onConflict?: string; ignoreDuplicates?: boolean; defaultToNull?: boolean } = {}
 	): QueryBuilder<null, R> {
@@ -490,14 +504,14 @@ export class TableBuilder<R> {
 	}
 
 	/** Change the rows the filters that follow select. Without a filter, PostgREST refuses. */
-	update(values: Partial<R>, options: WriteOptions = {}): QueryBuilder<null, R> {
+	change(values: Partial<R>, options: WriteOptions = {}): QueryBuilder<null, R> {
 		const builder = this.start<null>('PATCH', values);
 		withCount(builder, options.count);
 		return builder;
 	}
 
 	/** Remove the rows the filters that follow select. */
-	delete(options: WriteOptions = {}): QueryBuilder<null, R> {
+	remove(options: WriteOptions = {}): QueryBuilder<null, R> {
 		const builder = this.start<null>('DELETE');
 		withCount(builder, options.count);
 		return builder;
@@ -527,7 +541,7 @@ function setColumns(builder: QueryBuilder<unknown>, rows: readonly object[]): vo
 }
 
 /** Calls a Postgres function. `get: true` sends it as a GET with the arguments in the URL. */
-export function rpc<T>(
+export function procedure<T>(
 	transport: Transport,
 	restUrl: string,
 	schema: string | undefined,
@@ -560,3 +574,16 @@ export function rpc<T>(
 	withCount(builder, options.count);
 	return builder;
 }
+
+// The 0.3.x names, each the same function as its new one, kept for 0.4.x.
+
+QueryBuilder.prototype.select = QueryBuilder.prototype.read;
+
+TableBuilder.prototype.select = TableBuilder.prototype.read;
+TableBuilder.prototype.insert = TableBuilder.prototype.add;
+TableBuilder.prototype.upsert = TableBuilder.prototype.put;
+TableBuilder.prototype.update = TableBuilder.prototype.change;
+TableBuilder.prototype.delete = TableBuilder.prototype.remove;
+
+/** @deprecated Since 0.4.0: `procedure`, the same function. Removed in 0.5.0. */
+export const rpc = procedure;

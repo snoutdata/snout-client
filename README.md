@@ -11,24 +11,40 @@ import { snout } from '@snoutdata/client'
 
 const db = snout('https://<ref>.api.snoutdata.com', '<your app key>')
 
-const { data, error } = await db.from('todos').select('id, note').eq('done', false)
+const { data, error } = await db.table('todos').read('id, note').eq('done', false)
 await db.identity.passwordSignIn({ email, password })
-await db.files.space('documents').upload('invoices/7.pdf', file)
-db.channel('room:42').listen('signal', { event: 'cursor' }, (m) => draw(m.payload)).subscribe()
+await db.files.space('documents').put('invoices/7.pdf', file)
+db.live.topic('room:42').listen('signal', { event: 'cursor' }, (m) => draw(m.payload)).join()
 await db.fn.call('hello', { body: { name: 'Ada' } })
 await db.push.register({ transport: 'apns', token: deviceToken })
 ```
 
 Every call resolves to `{ data, error }` rather than throwing, so a refusal from the database is a
-value you can show. Queries are built by chaining (`from('todos').select().eq().order()`), and with
+value you can show. Queries are built by chaining (`table('todos').read().eq().order()`), and with
 the types `snoutdata gen types typescript` writes, every row is typed from your own schema.
+
+The client speaks the project's own paths (`/v1/data`, `/v1/identity`, `/v1/files`, `/v1/live`,
+`/v1/fn`) and sends the key as `Snout-Key`. For a server not yet updated to those names, pass
+`{ vocabulary: 'old' }`: the same calls then speak the layout 0.3.x spoke.
+
+**Upgrading from 0.3.x.** Every 0.3.x name still works in 0.4.x as a deprecated alias of its new
+one (the same function), and is removed in 0.5.0: `snout` is `snout`; `from`, `select`,
+`insert`, `update`, `upsert`, `delete` and `rpc` are `table`, `read`, `add`, `change`, `put`,
+`remove` and `procedure`; `auth` is `identity` (`passwordSignIn` is `passwordSignIn`,
+`getUser` is `currentPerson`, `onSessionChange` is `onSessionChange`, `admin` is `operator`,
+...); `files.space(b)` is `files.space(s)` (`upload`, `download`, `signedLink`,
+`publicLink` are `put`, `get`, `signedLink`, `publicLink`); `channel(n)` is `live.topic(n)`
+(`on`, `subscribe`, `send`, `track` are `listen`, `join`, `signal`, `announce`, with `changes`,
+`signal` and `roster` for `changes`, `broadcast` and `presence`); `functions.invoke` is
+`fn.call`. A person and a session carry `person`, `profile_data` and `server_data` beside
+`user`, `profile_data` and `server_data`.
 
 No bundler? The published files are plain ES modules, so a page can import them from a CDN, pinned
 to an exact version:
 
 ```html
 <script type="module">
-  import { snout } from 'https://cdn.jsdelivr.net/npm/@snoutdata/client@0.3.4/dist/index.js'
+  import { snout } from 'https://cdn.jsdelivr.net/npm/@snoutdata/client@0.4.0/dist/index.js'
 </script>
 ```
 

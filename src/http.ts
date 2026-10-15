@@ -13,6 +13,22 @@
 
 export type Fetch = typeof fetch;
 
+/**
+ * Which names the client speaks on the wire.
+ *
+ * `new` (the default) is our own layout: `/v1/data`, `/v1/identity`, `/v1/files`, `/v1/live`,
+ * `/v1/fn`, the key in a `Snout-Key` header, the auth server's new routes and fields, and the
+ * `live:` realtime wire. `old` is the layout 0.3.x spoke (`/v1/data`, `apikey`, ...), for a server
+ * that has not been updated to accept the new names yet. Only the names differ: every request
+ * means the same thing and every answer has the same shape either way.
+ */
+export type Vocabulary = 'new' | 'old';
+
+/** The header a request carries the project key in. */
+export function keyHeader(vocabulary: Vocabulary): string {
+	return vocabulary === 'old' ? 'apikey' : 'Snout-Key';
+}
+
 /** Resolves the headers one request carries: the key, and the bearer of the moment. */
 export type HeaderSource = () => Promise<Record<string, string>>;
 
@@ -90,16 +106,17 @@ export function checkSegment(segment: string, whole: string = segment): string {
 }
 
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
-const KEY_HEADERS = new Set(['apikey', 'authorization']);
+const KEY_HEADERS = new Set(['snout-key', 'apikey', 'authorization']);
 
 /**
  * A fetch that never carries the key or the bearer to another origin on a redirect.
  *
- * Fetch drops `Authorization` on a cross-origin hop but keeps the custom `apikey` header, so a
- * function (or anything else on the project) answering `307 Location: https://elsewhere` would
- * hand over the key, which on a server is the server key. Here a redirect is followed
- * by hand: within the request's own origin as fetch would, and to another origin without
- * those two headers (a storage download redirected to a presigned URL needs neither).
+ * Fetch drops `Authorization` on a cross-origin hop but keeps a custom key header (`Snout-Key`,
+ * or `apikey` in the old vocabulary), so a function (or anything else on the project) answering
+ * `307 Location: https://elsewhere` would hand over the key, which on a server is the server key.
+ * Here a redirect is followed by hand: within the request's own origin as fetch would, and to
+ * another origin without those headers (a storage download redirected to a presigned URL needs
+ * none of them).
  *
  * In a browser the key is the public app key and a manual redirect cannot be read, so the
  * platform's own following is kept. A caller that set `redirect` itself is left alone.

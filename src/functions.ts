@@ -4,9 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 /**
- * Snout Functions: your own TypeScript, at `/v1/fn/<name>`.
+ * Snout Functions: your own TypeScript, at `/v1/fn/<name>` (`/v1/fn/<name>` in the old
+ * vocabulary).
  *
- * `invoke` sends the signed-in user's token, so a function can act as them, and decodes the
+ * `call` sends the signed-in person's token, so a function can act as them, and decodes the
  * answer by its content type. A function that answers with a status of 400 or above is an
  * `error` whose `context` is the Response, so its own body can still be read.
  */
@@ -26,12 +27,15 @@ export class FunctionsError extends Error {
 
 export type FunctionsResult<T> = { data: T; error: null } | { data: null; error: FunctionsError };
 
-export interface InvokeOptions {
+export interface CallOptions {
 	body?: unknown;
 	headers?: Record<string, string>;
 	method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 	signal?: AbortSignal;
 }
+
+/** @deprecated Since 0.4.0: `CallOptions`. */
+export type InvokeOptions = CallOptions;
 
 /**
  * A function's name, by the rule the control plane applies when one is deployed: letters,
@@ -43,7 +47,7 @@ const FUNCTION_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$/;
 const RESOLVED_AWAY = /[\\\u0000-\u001f\u007f]/;
 
 /**
- * Refuses a target that would not stay under /v1/fn. The name must be one a function can
+ * Refuses a target that would not stay under the functions prefix. The name must be one a function can
  * have; after it, a subpath is the function's own, but a `.` or `..` segment, a backslash or a
  * control character would be resolved by the URL parser before the request leaves.
  */
@@ -69,9 +73,13 @@ export class FunctionsClient {
 		private readonly transport: Transport
 	) {}
 
-	async invoke<T = unknown>(name: string, options: InvokeOptions = {}): Promise<FunctionsResult<T>> {
+	/** @deprecated Since 0.4.0: use `call()`, the same function. Removed in 0.5.0. */
+	declare invoke: FunctionsClient['call'];
+
+	/** Calls the function `name` (a subpath or a query string after it is the function's own). */
+	async call<T = unknown>(name: string, options: CallOptions = {}): Promise<FunctionsResult<T>> {
 		// The name is sent as written (a subpath or a query string is the function's own), once it
-		// is known to stay under /v1/fn.
+		// is known to stay under the functions prefix.
 		try {
 			assertInFunctions(name);
 		} catch (cause) {
@@ -135,3 +143,5 @@ export class FunctionsClient {
 		return { data: data as T, error: null };
 	}
 }
+
+FunctionsClient.prototype.invoke = FunctionsClient.prototype.call;

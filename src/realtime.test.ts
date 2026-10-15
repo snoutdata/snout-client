@@ -36,7 +36,7 @@ function server(extra: (frame: Frame, socket: FakeSocket) => boolean = () => fal
 }
 
 function client(transport: typeof WebSocket, fetchImpl?: typeof fetch) {
-	return snout(URL_, 'app-key', {
+	return snout(URL_, 'app-key', { vocabulary: 'old',
 		global: { fetch: fetchImpl ?? fakeFetch().fetch },
 		auth: { persistSession: false, autoRefreshToken: false },
 		realtime: { transport, timeoutMs: 200 }
@@ -163,7 +163,7 @@ test('table changes said to be live in the same read as the join reply are SUBSC
 			socket.reply(frame);
 		}
 	});
-	const db = snout(URL_, 'app-key', {
+	const db = snout(URL_, 'app-key', { vocabulary: 'old',
 		global: { fetch: fakeFetch().fetch },
 		auth: { persistSession: false, autoRefreshToken: false },
 		realtime: { transport, timeoutMs: 5000 }

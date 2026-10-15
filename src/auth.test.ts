@@ -18,7 +18,7 @@ function tokenBody(accessToken: string, refreshToken: string, expiresIn = 3600) 
 function client(answer: (request: Sent) => { status?: number; body?: unknown }, storage?: Map<string, string>) {
 	const { fetch, sent } = fakeFetch(answer);
 	const store = storage ?? new Map<string, string>();
-	const db = snout(URL_, 'app-key', {
+	const db = snout(URL_, 'app-key', { vocabulary: 'old',
 		global: { fetch },
 		auth: {
 			autoRefreshToken: false,
@@ -115,7 +115,7 @@ test('OAuth builds the authorize URL with a PKCE challenge and keeps the verifie
 
 test('admin.deleteUser sends DELETE to the admin route with the key it was made with', async () => {
 	const { fetch, sent } = fakeFetch(() => ({ body: {} }));
-	const admin = snout(URL_, 'service-key', { global: { fetch }, auth: { persistSession: false, autoRefreshToken: false } });
+	const admin = snout(URL_, 'service-key', { vocabulary: 'old', global: { fetch }, auth: { persistSession: false, autoRefreshToken: false } });
 	const { error } = await admin.identity.operator.deleteUser('u1');
 	assert.equal(error, null);
 	assert.equal(sent[0].method, 'DELETE');
