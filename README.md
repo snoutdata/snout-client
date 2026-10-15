@@ -28,16 +28,16 @@ The client speaks the project's own paths (`/v1/data`, `/v1/identity`, `/v1/file
 `{ vocabulary: 'old' }`: the same calls then speak the layout 0.3.x spoke.
 
 **Upgrading from 0.3.x.** Every 0.3.x name still works in 0.4.x as a deprecated alias of its new
-one (the same function), and is removed in 0.5.0: `snout` is `snout`; `from`, `select`,
+one (the same function), and is removed in 0.5.0: `createClient` is `snout`; `from`, `select`,
 `insert`, `update`, `upsert`, `delete` and `rpc` are `table`, `read`, `add`, `change`, `put`,
-`remove` and `procedure`; `auth` is `identity` (`passwordSignIn` is `passwordSignIn`,
-`getUser` is `currentPerson`, `onSessionChange` is `onSessionChange`, `admin` is `operator`,
-...); `files.space(b)` is `files.space(s)` (`upload`, `download`, `signedLink`,
-`publicLink` are `put`, `get`, `signedLink`, `publicLink`); `channel(n)` is `live.topic(n)`
+`remove` and `procedure`; `auth` is `identity` (`signInWithPassword` is `passwordSignIn`,
+`getUser` is `currentPerson`, `onAuthStateChange` is `onSessionChange`, `admin` is `operator`,
+...); `storage.from(b)` is `files.space(s)` (`upload`, `download`, `createSignedUrl`,
+`getPublicUrl` are `put`, `get`, `signedLink`, `publicLink`); `channel(n)` is `live.topic(n)`
 (`on`, `subscribe`, `send`, `track` are `listen`, `join`, `signal`, `announce`, with `changes`,
-`signal` and `roster` for `changes`, `broadcast` and `presence`); `functions.invoke` is
+`signal` and `roster` for `postgres_changes`, `broadcast` and `presence`); `functions.invoke` is
 `fn.call`. A person and a session carry `person`, `profile_data` and `server_data` beside
-`user`, `profile_data` and `server_data`.
+`user`, `user_metadata` and `app_metadata`.
 
 No bundler? The published files are plain ES modules, so a page can import them from a CDN, pinned
 to an exact version:

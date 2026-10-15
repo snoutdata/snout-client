@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { snout } from './index.js';
+import { createClient } from './index.js';
 import { fakeFetch } from './testing.js';
 import { VERSION } from './version.js';
 
@@ -21,7 +21,7 @@ test('the version the client states is package.json\'s (npm version runs scripts
 
 test('every request names this version in X-Client-Info', async () => {
 	const { fetch, sent } = fakeFetch(() => ({ body: [] }));
-	const db = snout('https://abc123.api.snoutdata.com', 'app-key', { global: { fetch }, auth: { autoRefreshToken: false, detectSessionInUrl: false } });
+	const db = createClient('https://abc123.api.snoutdata.com', 'anon-key', { global: { fetch }, auth: { autoRefreshToken: false, detectSessionInUrl: false } });
 	await db.from('todos').select('id');
 	assert.equal(sent[0].headers['x-client-info'], `snoutdata-js/${packageVersion}`);
 });

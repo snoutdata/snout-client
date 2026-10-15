@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 /**
- * Files: files in spaces (buckets), at `/v1/files` (`/v1/files` in the old vocabulary).
+ * Files: files in spaces (buckets), at `/v1/files` (`/storage/v1` in the old vocabulary).
  *
  * Who may read or write a file is row-level security on the project's files table, exactly as
  * for a table, so the same signed-in session that reads rows reads files. A public space's
@@ -221,9 +221,9 @@ export class SpaceClient {
 	/** @deprecated Since 0.4.0: use `get()`, the same function. Removed in 0.5.0. */
 	declare download: SpaceClient['get'];
 	/** @deprecated Since 0.4.0: use `signedLink()`, the same function. Removed in 0.5.0. */
-	declare signedLink: SpaceClient['signedLink'];
+	declare createSignedUrl: SpaceClient['signedLink'];
 	/** @deprecated Since 0.4.0: use `publicLink()`, the same function. Removed in 0.5.0. */
-	declare publicLink: SpaceClient['publicLink'];
+	declare getPublicUrl: SpaceClient['publicLink'];
 
 	private at(name: keyof typeof ROUTES, rest: string): string {
 		return joinUrl(this.url, `${route(this.vocabulary, name)}/${rest}`);
@@ -423,8 +423,8 @@ StorageClient.prototype.deleteBucket = StorageClient.prototype.deleteSpace;
 
 SpaceClient.prototype.upload = SpaceClient.prototype.put;
 SpaceClient.prototype.download = SpaceClient.prototype.get;
-SpaceClient.prototype.signedLink = SpaceClient.prototype.signedLink;
-SpaceClient.prototype.publicLink = SpaceClient.prototype.publicLink;
+SpaceClient.prototype.createSignedUrl = SpaceClient.prototype.signedLink;
+SpaceClient.prototype.getPublicUrl = SpaceClient.prototype.publicLink;
 
 /** @deprecated Since 0.4.0: `SpaceClient`, the same class. */
 export const BucketClient = SpaceClient;

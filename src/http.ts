@@ -18,7 +18,7 @@ export type Fetch = typeof fetch;
  *
  * `new` (the default) is our own layout: `/v1/data`, `/v1/identity`, `/v1/files`, `/v1/live`,
  * `/v1/fn`, the key in a `Snout-Key` header, the auth server's new routes and fields, and the
- * `live:` realtime wire. `old` is the layout 0.3.x spoke (`/v1/data`, `apikey`, ...), for a server
+ * `live:` realtime wire. `old` is the layout 0.3.x spoke (`/rest/v1`, `apikey`, ...), for a server
  * that has not been updated to accept the new names yet. Only the names differ: every request
  * means the same thing and every answer has the same shape either way.
  */

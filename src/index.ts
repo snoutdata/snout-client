@@ -17,7 +17,7 @@
  * it grants what your policies grant the app role, and nothing else.
  *
  * A server not yet updated to the new names takes `{ vocabulary: 'old' }`, which speaks the
- * layout 0.3.x spoke (`/v1/data`, `apikey`, ...) with the same calls.
+ * layout 0.3.x spoke (`/rest/v1`, `apikey`, ...) with the same calls.
  */
 
 import { AuthClient, type AuthOptions } from './auth.js';
@@ -240,7 +240,7 @@ export function snout<DB = Database, S extends string = 'public'>(url: string, a
 }
 
 /** @deprecated Since 0.4.0: `snout()`, the same function. Removed in 0.5.0. */
-export const snout = snout;
+export const createClient = snout;
 
 // The 0.3.x names, each the same function as its new one, kept for 0.4.x.
 

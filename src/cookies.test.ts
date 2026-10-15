@@ -92,7 +92,7 @@ test('a value from before base64 encoding is returned as it is', () => {
 });
 
 test('a PKCE sign-in round-trips through the cookie store: verifier out, code back, session in', async () => {
-	const { snout } = await import('./index.js');
+	const { createClient } = await import('./index.js');
 	const { fakeFetch } = await import('./testing.js');
 	const cookies = jar();
 	const { fetch, sent } = fakeFetch((request) =>
@@ -101,9 +101,9 @@ test('a PKCE sign-in round-trips through the cookie store: verifier out, code ba
 			: { body: { access_token: 'a1', refresh_token: 'r1', token_type: 'bearer', expires_in: 3600, user: { id: 'u1' } } }
 	);
 	const options = { global: { fetch }, auth: { storage: cookieStorage({}, cookies), storageKey: 'sb-accounts-auth-token', autoRefreshToken: false, detectSessionInUrl: false } };
-	await snout('https://accounts.snoutdata.com', 'snout_app', options).identity.ssoSignIn({ domain: 'example.com', options: { skipBrowserRedirect: true } });
+	await createClient('https://accounts.snoutdata.com', 'anon', options).auth.signInWithSSO({ domain: 'example.com', options: { skipBrowserRedirect: true } });
 	// The page navigates away and comes back: a new client, reading the same cookies.
-	const { data, error } = await snout('https://accounts.snoutdata.com', 'snout_app', options).identity.finishProviderSignIn('code-1');
+	const { data, error } = await createClient('https://accounts.snoutdata.com', 'anon', options).auth.exchangeCodeForSession('code-1');
 	assert.equal(error, null);
 	assert.equal(data.session?.access_token, 'a1');
 	assert.ok((JSON.parse(sent.at(-1)?.body ?? '{}').code_verifier ?? '').length >= 43);

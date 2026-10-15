@@ -85,6 +85,10 @@ export function fakeSocket(onFrame: (frame: Frame, socket: FakeSocket) => void):
 			this.onmessage?.({ data: JSON.stringify(frame) });
 		}
 
+		serveRaw(data: string): void {
+			this.onmessage?.({ data });
+		}
+
 		reply(to: Frame, response: Record<string, unknown> = {}, status = 'ok'): void {
 			this.serve({ topic: to.topic, event: 'phx_reply', payload: { status, response }, ref: to.ref, join_ref: to.join_ref });
 		}
@@ -98,6 +102,8 @@ export interface FakeSocket {
 	readonly frames: Frame[];
 	close(): void;
 	serve(frame: Frame): void;
+	/** Any text at all, as a hostile or broken server could send it. */
+	serveRaw(data: string): void;
 	reply(to: Frame, response?: Record<string, unknown>, status?: string): void;
 }
 

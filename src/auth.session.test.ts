@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { snout, type AuthEvent } from './index.js';
+import { createClient, type AuthEvent } from './index.js';
 import { fakeFetch, jwt, type Sent } from './testing.js';
 
 const URL_ = 'https://abc123.api.snoutdata.com';
@@ -28,7 +28,7 @@ function mapStorage(store: Map<string, string>) {
 function client(answer: (request: Sent) => { status?: number; body?: unknown }, storage?: Map<string, string>) {
 	const { fetch, sent } = fakeFetch(answer);
 	const store = storage ?? new Map<string, string>();
-	const db = snout(URL_, 'app-key', { vocabulary: 'old', global: { fetch }, auth: { autoRefreshToken: false, detectSessionInUrl: false, storage: mapStorage(store) } });
+	const db = createClient(URL_, 'anon-key', { vocabulary: 'old', global: { fetch }, auth: { autoRefreshToken: false, detectSessionInUrl: false, storage: mapStorage(store) } });
 	return { db, sent, store };
 }
 
@@ -36,10 +36,10 @@ const inAnHour = () => Math.floor(Date.now() / 1000) + 3600;
 
 test('SSO asks the server for the IdP URL by domain, with a PKCE challenge, and keeps the verifier', async () => {
 	const { db, sent, store } = client(() => ({ body: { url: 'https://idp.example.com/saml?x=1' } }));
-	const { data, error } = await db.identity.ssoSignIn({ domain: 'example.com', options: { redirectTo: 'https://app.example.com/cb', skipBrowserRedirect: true } });
+	const { data, error } = await db.auth.signInWithSSO({ domain: 'example.com', options: { redirectTo: 'https://app.example.com/cb', skipBrowserRedirect: true } });
 	assert.equal(error, null);
 	assert.equal(data.url, 'https://idp.example.com/saml?x=1');
-	assert.equal(new URL(sent[0].url).pathname, '/v1/identity/sso/start');
+	assert.equal(new URL(sent[0].url).pathname, '/auth/v1/sso');
 	const body = JSON.parse(sent[0].body ?? '{}');
 	assert.equal(body.domain, 'example.com');
 	assert.equal(body.skip_http_redirect, true);
@@ -50,7 +50,7 @@ test('SSO asks the server for the IdP URL by domain, with a PKCE challenge, and 
 
 test('SSO that the server refuses drops the verifier it stored', async () => {
 	const { db, store } = client(() => ({ status: 404, body: { error_code: 'sso_provider_not_found', msg: 'No SSO provider assigned for this domain' } }));
-	const { data, error } = await db.identity.ssoSignIn({ providerId: 'p1', options: { skipBrowserRedirect: true } });
+	const { data, error } = await db.auth.signInWithSSO({ providerId: 'p1', options: { skipBrowserRedirect: true } });
 	assert.equal(data.url, null);
 	assert.equal(error?.code, 'sso_provider_not_found');
 	assert.equal(store.get('snoutdata-abc123-auth-code-verifier'), undefined);
@@ -71,8 +71,8 @@ test('an ID token is exchanged at grant_type=id_token and becomes the session', 
 
 test('getUser() with no session asks about the bearer the client was made with', async () => {
 	const { fetch, sent } = fakeFetch(() => ({ body: { id: 'u9' } }));
-	const asUser = snout(URL_, 'app-key', { vocabulary: 'old', global: { fetch, headers: { Authorization: 'Bearer user-jwt' } }, auth: { persistSession: false, autoRefreshToken: false } });
-	const { data, error } = await asUser.identity.currentPerson();
+	const asUser = createClient(URL_, 'anon-key', { vocabulary: 'old', global: { fetch, headers: { Authorization: 'Bearer user-jwt' } }, auth: { persistSession: false, autoRefreshToken: false } });
+	const { data, error } = await asUser.auth.getUser();
 	assert.equal(error, null);
 	assert.equal(data.user?.id, 'u9');
 	assert.equal(sent[0].headers.authorization, 'Bearer user-jwt');
@@ -83,8 +83,8 @@ test('a session another holder refreshed in shared storage is adopted, not refre
 	store.set('snoutdata-abc123-auth', JSON.stringify({ ...tokenBody('a1', 'r1'), expires_at: inAnHour() }));
 	const { db, sent } = client(() => ({ body: [] }), store);
 	const events: AuthEvent[] = [];
-	db.identity.onSessionChange((event) => events.push(event));
-	await db.identity.currentSession();
+	db.auth.onAuthStateChange((event) => events.push(event));
+	await db.auth.getSession();
 	// Another tab, origin or app instance rotated it.
 	store.set('snoutdata-abc123-auth', JSON.stringify({ ...tokenBody('a2', 'r2'), expires_at: inAnHour() }));
 	await db.from('t').select();
@@ -97,9 +97,9 @@ test('a refresh presents the token storage holds now, never the spent one in mem
 	const store = new Map<string, string>();
 	store.set('snoutdata-abc123-auth', JSON.stringify({ ...tokenBody('a1', 'r1'), expires_at: inAnHour() }));
 	const { db, sent } = client((request) => (request.url.includes('refresh_token') ? { body: tokenBody('a3', 'r3') } : { body: [] }), store);
-	await db.identity.currentSession();
+	await db.auth.getSession();
 	store.set('snoutdata-abc123-auth', JSON.stringify({ ...tokenBody('a2', 'r2'), expires_at: Math.floor(Date.now() / 1000) - 10 }));
-	await db.identity.renew();
+	await db.auth.refreshSession();
 	const refresh = sent.find((s) => s.url.includes('refresh_token'));
 	assert.equal(JSON.parse(refresh?.body ?? '{}').refresh_token, 'r2');
 });
@@ -108,9 +108,9 @@ test('a session removed from shared storage signs this client out too', async ()
 	const store = new Map<string, string>();
 	store.set('snoutdata-abc123-auth', JSON.stringify({ ...tokenBody('a1', 'r1'), expires_at: inAnHour() }));
 	const { db } = client(() => ({ body: [] }), store);
-	await db.identity.currentSession();
+	await db.auth.getSession();
 	store.delete('snoutdata-abc123-auth');
-	assert.equal((await db.identity.currentSession()).data.session, null);
+	assert.equal((await db.auth.getSession()).data.session, null);
 });
 
 test('a session an older client saved (an older desktop, the same key) is used as it is', async () => {
@@ -125,16 +125,16 @@ test('a session an older client saved (an older desktop, the same key) is used a
 			expires_in: 3600,
 			expires_at: inAnHour(),
 			refresh_token: 'r1',
-			user: { id: 'u1', aud: 'snout_member', role: 'snout_member', email: 'ada@example.com', server_data: { provider: 'google' }, profile_data: {}, identities: [] },
+			user: { id: 'u1', aud: 'authenticated', role: 'authenticated', email: 'ada@example.com', app_metadata: { provider: 'google' }, user_metadata: {}, identities: [] },
 			weak_password: null
 		})
 	);
 	const { fetch, sent } = fakeFetch(() => ({ body: [] }));
-	const db = snout(URL_, 'app-key', { vocabulary: 'old',
+	const db = createClient(URL_, 'anon-key', { vocabulary: 'old',
 		global: { fetch },
 		auth: { autoRefreshToken: false, detectSessionInUrl: false, storageKey: 'positron-db-auth', storage: mapStorage(store) }
 	});
-	const { data } = await db.identity.currentSession();
+	const { data } = await db.auth.getSession();
 	assert.equal(data.session?.user.id, 'u1');
 	await db.from('profiles').select();
 	assert.equal(sent[0].headers.authorization, `Bearer ${access}`);
@@ -145,7 +145,7 @@ test('what a refresh saves carries every field an older client needs to read it 
 	const store = new Map<string, string>();
 	store.set('snoutdata-abc123-auth', JSON.stringify({ ...tokenBody('old', 'r1'), expires_at: Math.floor(Date.now() / 1000) - 10 }));
 	const { db } = client(() => ({ body: tokenBody('new', 'r2') }), store);
-	await db.identity.currentSession();
+	await db.auth.getSession();
 	const saved = JSON.parse(store.get('snoutdata-abc123-auth') ?? '{}');
 	for (const field of ['access_token', 'refresh_token', 'expires_at', 'expires_in', 'token_type', 'user']) {
 		assert.ok(saved[field] !== undefined, field);
@@ -158,7 +158,7 @@ test('a PKCE verifier an older client stored (JSON, with a recovery suffix) stil
 	const access = jwt({ sub: 'u1', exp: inAnHour() });
 	const { db, sent, store } = client(() => ({ body: tokenBody(access, 'r1') }));
 	store.set('snoutdata-abc123-auth-code-verifier', JSON.stringify('the-verifier/PASSWORD_RECOVERY'));
-	const { error } = await db.identity.finishProviderSignIn('code-1');
+	const { error } = await db.auth.exchangeCodeForSession('code-1');
 	assert.equal(error, null);
 	assert.equal(JSON.parse(sent[0].body ?? '{}').code_verifier, 'the-verifier');
 });
@@ -168,11 +168,11 @@ test('stopAutoRefresh holds a due refresh until startAutoRefresh, and debug says
 	const lines: string[] = [];
 	store.set('snoutdata-abc123-auth', JSON.stringify({ ...tokenBody('a1', 'r1'), expires_at: Math.floor(Date.now() / 1000) + 61 }));
 	const { fetch, sent } = fakeFetch(() => ({ status: 400, body: { error_code: 'refresh_token_not_found', msg: 'Invalid Refresh Token' } }));
-	const db = snout(URL_, 'app-key', { vocabulary: 'old',
+	const db = createClient(URL_, 'anon-key', { vocabulary: 'old',
 		global: { fetch },
 		auth: { autoRefreshToken: true, detectSessionInUrl: false, debug: (...parts) => lines.push(parts.join(' ')), storage: mapStorage(store) }
 	});
-	await db.identity.currentSession();
+	await db.auth.getSession();
 	db.auth.stopAutoRefresh();
 	// Due in about a second. Paused, it must not go.
 	await new Promise((resolve) => setTimeout(resolve, 1200));
@@ -206,8 +206,8 @@ test('PKCE mode ignores #access_token in the URL and keeps the stored session (n
 	store.set('snoutdata-abc123-auth', JSON.stringify({ ...tokenBody(mine, 'r-mine'), expires_at: inAnHour() }));
 	await atUrl(`https://app.example.com/#access_token=${theirs}&refresh_token=r-theirs&expires_in=3600`, async (replaced) => {
 		const { fetch, sent } = fakeFetch(() => ({ body: { id: 'attacker', email: 'eve@example.com' } }));
-		const db = snout(URL_, 'app-key', { vocabulary: 'old', global: { fetch }, auth: { autoRefreshToken: false, detectSessionInUrl: true, flowType: 'pkce', storage: mapStorage(store) } });
-		const { data } = await db.identity.currentSession();
+		const db = createClient(URL_, 'anon-key', { vocabulary: 'old', global: { fetch }, auth: { autoRefreshToken: false, detectSessionInUrl: true, flowType: 'pkce', storage: mapStorage(store) } });
+		const { data } = await db.auth.getSession();
 		assert.equal(data.session?.access_token, mine);
 		assert.equal(sent.length, 0);
 		assert.equal(replaced.length, 0);
@@ -220,8 +220,8 @@ test('PKCE is the default flow, so a fragment is ignored without naming it', asy
 	await atUrl(`https://app.example.com/#access_token=${theirs}&refresh_token=r-theirs`, async () => {
 		const { fetch, sent } = fakeFetch(() => ({ body: { id: 'attacker' } }));
 		const store = new Map<string, string>();
-		const db = snout(URL_, 'app-key', { vocabulary: 'old', global: { fetch }, auth: { autoRefreshToken: false, detectSessionInUrl: true, storage: mapStorage(store) } });
-		const { data } = await db.identity.currentSession();
+		const db = createClient(URL_, 'anon-key', { vocabulary: 'old', global: { fetch }, auth: { autoRefreshToken: false, detectSessionInUrl: true, storage: mapStorage(store) } });
+		const { data } = await db.auth.getSession();
 		assert.equal(data.session, null);
 		assert.equal(sent.length, 0);
 	});
@@ -231,10 +231,10 @@ test('implicit mode still finishes a redirect from #access_token', async () => {
 	const access = jwt({ sub: 'u1', exp: inAnHour() });
 	await atUrl(`https://app.example.com/cb?x=1#access_token=${access}&refresh_token=r1&expires_in=3600`, async (replaced) => {
 		const { fetch, sent } = fakeFetch(() => ({ body: { id: 'u1', email: 'ada@example.com' } }));
-		const db = snout(URL_, 'app-key', { vocabulary: 'old', global: { fetch }, auth: { autoRefreshToken: false, detectSessionInUrl: true, flowType: 'implicit', storage: mapStorage(new Map()) } });
-		const { data } = await db.identity.currentSession();
+		const db = createClient(URL_, 'anon-key', { vocabulary: 'old', global: { fetch }, auth: { autoRefreshToken: false, detectSessionInUrl: true, flowType: 'implicit', storage: mapStorage(new Map()) } });
+		const { data } = await db.auth.getSession();
 		assert.equal(data.session?.access_token, access);
-		assert.equal(new URL(sent[0].url).pathname, '/v1/identity/person');
+		assert.equal(new URL(sent[0].url).pathname, '/auth/v1/user');
 		assert.deepEqual(replaced, ['/cb?x=1']);
 	});
 });

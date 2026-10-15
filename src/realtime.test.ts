@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { snout, type PostgresChangesPayload, type PresenceJoin, type SubscribeStatus } from './index.js';
+import { createClient, type PostgresChangesPayload, type PresenceJoin, type SubscribeStatus } from './index.js';
 import { fakeFetch, fakeSocket, tick, type FakeSocket, type Frame } from './testing.js';
 
 const URL_ = 'https://abc123.api.snoutdata.com';
@@ -24,7 +24,7 @@ function server(extra: (frame: Frame, socket: FakeSocket) => boolean = () => fal
 			if (changes.length > 0) {
 				// What Realtime sends once it has actually started capturing the changes.
 				queueMicrotask(() =>
-					socket.serve({ topic: frame.topic, event: 'system', payload: { status: 'ok', extension: 'changes', message: 'Subscribed to PostgreSQL' }, ref: null })
+					socket.serve({ topic: frame.topic, event: 'system', payload: { status: 'ok', extension: 'postgres_changes', message: 'Subscribed to PostgreSQL' }, ref: null })
 				);
 			}
 		} else if (frame.event === 'broadcast') {
@@ -36,7 +36,7 @@ function server(extra: (frame: Frame, socket: FakeSocket) => boolean = () => fal
 }
 
 function client(transport: typeof WebSocket, fetchImpl?: typeof fetch) {
-	return snout(URL_, 'app-key', { vocabulary: 'old',
+	return createClient(URL_, 'anon-key', { vocabulary: 'old',
 		global: { fetch: fetchImpl ?? fakeFetch().fetch },
 		auth: { persistSession: false, autoRefreshToken: false },
 		realtime: { transport, timeoutMs: 200 }
@@ -56,12 +56,12 @@ test('the socket opens on subscribe, with the key and protocol version, and join
 	assert.equal(sockets.length, 0);
 	assert.equal(await subscribed(channel), 'SUBSCRIBED');
 	const url = new URL(sockets[0].url);
-	assert.equal(url.origin + url.pathname, 'wss://abc123.api.snoutdata.com/v1/live/websocket');
-	assert.equal(url.searchParams.get('apikey'), 'app-key');
+	assert.equal(url.origin + url.pathname, 'wss://abc123.api.snoutdata.com/realtime/v1/websocket');
+	assert.equal(url.searchParams.get('apikey'), 'anon-key');
 	assert.equal(url.searchParams.get('vsn'), '1.0.0');
 	const join = sockets[0].frames.find((f) => f.event === 'phx_join');
-	assert.equal(join?.topic, 'live:room:42');
-	assert.equal(join?.payload.access_token, 'app-key');
+	assert.equal(join?.topic, 'realtime:room:42');
+	assert.equal(join?.payload.access_token, 'anon-key');
 	await db.removeChannel(channel);
 });
 
@@ -69,7 +69,7 @@ test('a broadcast with self: true comes back to its sender', async () => {
 	const { transport } = server();
 	const db = client(transport);
 	const channel = db.channel('room:1', { config: { broadcast: { self: true } } });
-	const received = new Promise((resolve) => channel.listen('signal', { event: 'ping' }, (message) => resolve(message.payload)));
+	const received = new Promise((resolve) => channel.on('broadcast', { event: 'ping' }, (message) => resolve(message.payload)));
 	await subscribed(channel);
 	assert.equal(await channel.send({ type: 'broadcast', event: 'ping', payload: { n: 1 } }), 'ok');
 	assert.deepEqual(await received, { n: 1 });
@@ -82,7 +82,7 @@ test('a broadcast from a channel that is not joined goes over HTTP', async () =>
 	const db = client(transport, fetch);
 	const status = await db.channel('room:9').send({ type: 'broadcast', event: 'hi', payload: { a: 1 } });
 	assert.equal(status, 'ok');
-	assert.equal(sent[0].url, `${URL_}/v1/live/signal`);
+	assert.equal(sent[0].url, `${URL_}/realtime/v1/api/broadcast`);
 	assert.deepEqual(JSON.parse(sent[0].body ?? ''), { messages: [{ topic: 'room:9', event: 'hi', payload: { a: 1 }, private: false }] });
 });
 
@@ -93,14 +93,14 @@ test('table changes are routed by the ids the server granted, and reshaped', asy
 	const deletes: PostgresChangesPayload[] = [];
 	const channel = db
 		.channel('feed')
-		.listen('changes', { event: 'INSERT', schema: 'public', table: 'todos' }, (p) => inserts.push(p))
-		.listen('changes', { event: 'DELETE', schema: 'public', table: 'todos' }, (p) => deletes.push(p));
+		.on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'todos' }, (p) => inserts.push(p))
+		.on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'todos' }, (p) => deletes.push(p));
 	await subscribed(channel);
 	const join = sockets[0].frames.find((f) => f.event === 'phx_join');
 	assert.equal((join?.payload.config as { postgres_changes: unknown[] }).postgres_changes.length, 2);
 	sockets[0].serve({
-		topic: 'live:feed',
-		event: 'changes',
+		topic: 'realtime:feed',
+		event: 'postgres_changes',
 		payload: { ids: [100], data: { schema: 'public', table: 'todos', commit_timestamp: 't', type: 'INSERT', record: { id: 1 }, errors: null } },
 		ref: null
 	});
@@ -122,8 +122,8 @@ test('with table changes, SUBSCRIBED waits for Realtime to say they are live, an
 					topic: frame.topic,
 					event: 'system',
 					payload: refuse
-						? { status: 'error', extension: 'changes', message: 'Unable to subscribe to changes' }
-						: { status: 'ok', extension: 'changes', message: 'Subscribed to PostgreSQL' },
+						? { status: 'error', extension: 'postgres_changes', message: 'Unable to subscribe to changes' }
+						: { status: 'ok', extension: 'postgres_changes', message: 'Subscribed to PostgreSQL' },
 					ref: null
 				});
 			}, 20);
@@ -133,12 +133,12 @@ test('with table changes, SUBSCRIBED waits for Realtime to say they are live, an
 	});
 	const db = client(transport);
 	const statuses: string[] = [];
-	const live = db.channel('a').listen('changes', { event: 'INSERT', schema: 'public', table: 't' }, () => {});
+	const live = db.channel('a').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 't' }, () => {});
 	await new Promise<void>((resolve) => live.subscribe((status) => { statuses.push(status); resolve(); }));
 	assert.deepEqual(statuses, ['SUBSCRIBED']);
 	assert.equal(live.state, 'joined');
 	refuse = true;
-	const refused = db.channel('b').listen('changes', { event: 'INSERT', schema: 'public', table: 't' }, () => {});
+	const refused = db.channel('b').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 't' }, () => {});
 	const outcome = await new Promise<[string, Error | undefined]>((resolve) => refused.subscribe((s, e) => resolve([s, e])));
 	assert.equal(outcome[0], 'CHANNEL_ERROR');
 	assert.match(outcome[1]?.message ?? '', /Unable to subscribe/);
@@ -155,25 +155,25 @@ test('table changes said to be live in the same read as the join reply are SUBSC
 				topic: frame.topic,
 				event: 'system',
 				payload: refuse
-					? { status: 'error', extension: 'changes', message: 'Unable to subscribe to changes' }
-					: { status: 'ok', extension: 'changes', message: 'Subscribed to PostgreSQL' },
+					? { status: 'error', extension: 'postgres_changes', message: 'Unable to subscribe to changes' }
+					: { status: 'ok', extension: 'postgres_changes', message: 'Subscribed to PostgreSQL' },
 				ref: null
 			});
 		} else if (frame.event === 'phx_leave') {
 			socket.reply(frame);
 		}
 	});
-	const db = snout(URL_, 'app-key', { vocabulary: 'old',
+	const db = createClient(URL_, 'anon-key', { vocabulary: 'old',
 		global: { fetch: fakeFetch().fetch },
 		auth: { persistSession: false, autoRefreshToken: false },
 		realtime: { transport, timeoutMs: 5000 }
 	});
 	const started = Date.now();
-	const live = db.channel('a').listen('changes', { event: 'INSERT', schema: 'public', table: 't' }, () => {});
+	const live = db.channel('a').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 't' }, () => {});
 	assert.equal(await subscribed(live), 'SUBSCRIBED');
 	assert.ok(Date.now() - started < 1000, `SUBSCRIBED took ${Date.now() - started} ms`);
 	refuse = true;
-	const refused = db.channel('b').listen('changes', { event: 'INSERT', schema: 'public', table: 't' }, () => {});
+	const refused = db.channel('b').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 't' }, () => {});
 	const outcome = await new Promise<[string, Error | undefined]>((resolve) => refused.subscribe((s, e) => resolve([s, e])));
 	assert.equal(outcome[0], 'CHANNEL_ERROR');
 	assert.match(outcome[1]?.message ?? '', /Unable to subscribe/);
@@ -203,18 +203,18 @@ test('presence: joins and leaves update the state and reach their listeners', as
 	let syncs = 0;
 	const channel = db
 		.channel('lobby', { config: { presence: { key: 'ada' } } })
-		.listen('roster', { event: 'join' }, (join) => joins.push(join))
-		.listen('roster', { event: 'sync' }, () => void (syncs += 1));
+		.on('presence', { event: 'join' }, (join) => joins.push(join))
+		.on('presence', { event: 'sync' }, () => void (syncs += 1));
 	await subscribed(channel);
 	const join = sockets[0].frames.find((f) => f.event === 'phx_join');
 	assert.deepEqual((join?.payload.config as { presence: unknown }).presence, { key: 'ada', enabled: true });
 	assert.equal(await channel.track({ online_at: 1 }), 'ok');
-	sockets[0].serve({ topic: 'live:lobby', event: 'roster_state', payload: { ada: { metas: [{ phx_ref: 'p1', online_at: 1 }] } }, ref: null });
-	sockets[0].serve({ topic: 'live:lobby', event: 'roster_diff', payload: { joins: { bob: { metas: [{ phx_ref: 'p2' }] } }, leaves: {} }, ref: null });
+	sockets[0].serve({ topic: 'realtime:lobby', event: 'presence_state', payload: { ada: { metas: [{ phx_ref: 'p1', online_at: 1 }] } }, ref: null });
+	sockets[0].serve({ topic: 'realtime:lobby', event: 'presence_diff', payload: { joins: { bob: { metas: [{ phx_ref: 'p2' }] } }, leaves: {} }, ref: null });
 	assert.deepEqual(Object.keys(channel.presenceState()).sort(), ['ada', 'bob']);
 	assert.deepEqual(channel.presenceState().ada, [{ online_at: 1, presence_ref: 'p1' }]);
 	assert.deepEqual(joins.map((j) => j.key), ['ada', 'bob']);
-	sockets[0].serve({ topic: 'live:lobby', event: 'roster_diff', payload: { joins: {}, leaves: { bob: { metas: [{ phx_ref: 'p2' }] } } }, ref: null });
+	sockets[0].serve({ topic: 'realtime:lobby', event: 'presence_diff', payload: { joins: {}, leaves: { bob: { metas: [{ phx_ref: 'p2' }] } } }, ref: null });
 	assert.deepEqual(Object.keys(channel.presenceState()), ['ada']);
 	assert.equal(syncs, 3);
 	await db.removeChannel(channel);
@@ -244,7 +244,7 @@ test('a channel the server closed rejoins and announces its presence again', asy
 	const { transport, sockets } = server();
 	const db = client(transport);
 	let joins = 0;
-	const channel = db.channel('lobby', { config: { presence: { key: 'ada' } } }).listen('roster', { event: 'sync' }, () => {});
+	const channel = db.channel('lobby', { config: { presence: { key: 'ada' } } }).on('presence', { event: 'sync' }, () => {});
 	await new Promise<void>((resolve) =>
 		channel.subscribe((status) => {
 			if (status !== 'SUBSCRIBED') {
@@ -254,7 +254,7 @@ test('a channel the server closed rejoins and announces its presence again', asy
 			if (joins === 1) {
 				void channel.track({ name: 'Purple Otter' }).then(() =>
 					// What Realtime does past the message limit: a system message, then phx_close.
-					sockets[0].serve({ topic: 'live:lobby', event: 'phx_close', payload: {}, ref: null })
+					sockets[0].serve({ topic: 'realtime:lobby', event: 'phx_close', payload: {}, ref: null })
 				);
 			} else {
 				resolve();
@@ -329,4 +329,15 @@ test('call() with no reply is timed_out', async () => {
 		clearInterval(keepAlive);
 	}
 	await db.removeChannel(channel);
+});
+
+test('a frame that is not an object is ignored, and the channel keeps working', async () => {
+	const { transport, sockets } = server();
+	const db = client(transport);
+	const channel = db.channel('room:7');
+	assert.equal(await subscribed(channel), 'SUBSCRIBED');
+	for (const data of ['null', '42', '"text"', '[1,2]']) {
+		assert.doesNotThrow(() => sockets[0].serveRaw(data));
+	}
+	assert.equal(await channel.send({ type: 'broadcast', event: 'ping', payload: { n: 2 } }), 'ok');
 });

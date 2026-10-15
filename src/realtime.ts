@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 /**
- * Live: one websocket at `/v1/live` (`/v1/live` in the old vocabulary), carrying signals,
+ * Live: one websocket at `/v1/live` (`/realtime/v1` in the old vocabulary), carrying signals,
  * the roster (who is present) and table changes.
  *
  * The wire is Phoenix channels (protocol 1.0.0): every frame is JSON
@@ -16,7 +16,7 @@
  * a network blip without writing any code for it.
  *
  * In the old vocabulary the same frames say `realtime:`, `broadcast`, `presence` and
- * `changes`. Everything inside this file speaks the old names; a frame is put into the
+ * `postgres_changes`. Everything inside this file speaks the old names; a frame is put into the
  * new ones as it leaves and back as it arrives (`speak`, `hear`), as the server does.
  *
  * The socket opens on the first `join()`, not before: a page that never joins never holds a
@@ -27,11 +27,11 @@ import { joinUrl, type Transport, type Vocabulary } from './http.js';
 
 /** The wire's event names, old then new. The first three are also a join's config keys. */
 const WIRE_NAMES: readonly (readonly [old: string, renamed: string])[] = [
-	['changes', 'changes'],
+	['postgres_changes', 'changes'],
 	['broadcast', 'signal'],
 	['presence', 'roster'],
-	['roster_state', 'roster_state'],
-	['roster_diff', 'roster_diff']
+	['presence_state', 'roster_state'],
+	['presence_diff', 'roster_diff']
 ];
 
 /** A topic's prefix on the wire, per vocabulary. */
@@ -162,7 +162,7 @@ interface Binding {
 type Reply = { status: string; response: Record<string, unknown> };
 
 /**
- * A realtime handler (`snout_live.on()`) that did not complete. `code` is `unauthorized`,
+ * A realtime handler (`realtime.on()`) that did not complete. `code` is `unauthorized`,
  * `timeout`, `no_handler`, `not_joined`, `timed_out` (no reply came), or the SQLSTATE the
  * handler raised (`P0001` for a plain `raise exception`).
  */
@@ -454,6 +454,10 @@ export class RealtimeClient {
 		} catch {
 			return;
 		}
+		// `null`, a number or an array parses as JSON too, and a server can send one.
+		if (frame === null || typeof frame !== 'object' || Array.isArray(frame)) {
+			return;
+		}
 		if (frame.topic === 'phoenix' && frame.ref === this.heartbeatRef) {
 			this.heartbeatRef = null;
 		}
@@ -543,7 +547,7 @@ export class RealtimeChannel {
 		(type: 'presence', filter: { event: 'join' }, callback: (join: RosterJoin) => void): RealtimeChannel;
 		(type: 'presence', filter: { event: 'leave' }, callback: (leave: RosterLeave) => void): RealtimeChannel;
 		<T extends Record<string, unknown> = Record<string, unknown>>(
-			type: 'changes',
+			type: 'postgres_changes',
 			filter: ChangesFilter,
 			callback: (payload: ChangesPayload<T>) => void
 		): RealtimeChannel;
@@ -634,8 +638,8 @@ export class RealtimeChannel {
 
 	/**
 	 * Runs the project's realtime handler for `event` on this channel (registered with
-	 * `snout_live.on()` in SQL) as the signed-in user, and resolves with what it returned. What the
-	 * handler sends with `snout_live.emit()` reaches the channel only if it succeeded. The channel
+	 * `realtime.on()` in SQL) as the signed-in user, and resolves with what it returned. What the
+	 * handler sends with `realtime.emit()` reaches the channel only if it succeeded. The channel
 	 * must be joined.
 	 */
 	async call<T = unknown>(event: string, payload: unknown = {}): Promise<{ data: T | null; error: RealtimeHandlerError | null }> {
@@ -723,7 +727,7 @@ export class RealtimeChannel {
 		this.earlyChanges = undefined;
 		const joinRef = this.client.nextRef();
 		this.joinRef = joinRef;
-		const changes = this.bindings.filter((binding) => binding.type === 'changes');
+		const changes = this.bindings.filter((binding) => binding.type === 'postgres_changes');
 		const config = this.options.config ?? {};
 		const payload = {
 			config: {
@@ -841,14 +845,14 @@ export class RealtimeChannel {
 			case 'broadcast':
 				this.dispatch('broadcast', (filter) => filter.event === '*' || filter.event === frame.payload.event, frame.payload);
 				return;
-			case 'roster_state':
+			case 'presence_state':
 				this.presenceSync(frame.payload as Record<string, { metas: Record<string, unknown>[] }>);
 				return;
-			case 'roster_diff':
+			case 'presence_diff':
 				this.presenceDiff(frame.payload as { joins: Record<string, { metas: Record<string, unknown>[] }>; leaves: Record<string, { metas: Record<string, unknown>[] }> });
 				return;
 			case 'system':
-				if (frame.payload.extension === 'changes') {
+				if (frame.payload.extension === 'postgres_changes') {
 					const refusal = frame.payload.status === 'ok' ? null : String(frame.payload.message ?? 'Realtime refused the table changes');
 					if (this.awaitingChanges !== undefined) {
 						this.changesLive(refusal);
@@ -858,7 +862,7 @@ export class RealtimeChannel {
 				}
 				this.dispatch('system', () => true, frame.payload);
 				return;
-			case 'changes':
+			case 'postgres_changes':
 				this.postgresChange(frame.payload as { ids?: number[]; data: Record<string, unknown> });
 				return;
 			default:
@@ -886,7 +890,7 @@ export class RealtimeChannel {
 			errors: (data.errors ?? null) as string[] | null
 		};
 		for (const binding of this.bindings) {
-			if (binding.type !== 'changes') {
+			if (binding.type !== 'postgres_changes') {
 				continue;
 			}
 			const filter = binding.filter as unknown as PostgresChangesFilter;

@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 /**
- * The data API: a query builder over PostgREST at `/v1/data` (`/v1/data` in the old vocabulary).
+ * The data API: a query builder over PostgREST at `/v1/data` (`/rest/v1` in the old vocabulary).
  *
  * A builder is a description of one request, and awaiting it sends it. Nothing is sent by
  * `read()` or `eq()`; they only add to the URL, which is why a builder can be passed

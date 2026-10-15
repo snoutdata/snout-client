@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 /**
- * Snout Functions: your own TypeScript, at `/v1/fn/<name>` (`/v1/fn/<name>` in the old
+ * Snout Functions: your own TypeScript, at `/v1/fn/<name>` (`/functions/v1/<name>` in the old
  * vocabulary).
  *
  * `call` sends the signed-in person's token, so a function can act as them, and decodes the

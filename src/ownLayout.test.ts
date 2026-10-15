@@ -14,7 +14,7 @@ import { test } from 'node:test';
 import {
 	AuthClient,
 	BucketClient,
-	snout,
+	createClient,
 	FunctionsClient,
 	procedure,
 	QueryBuilder,
@@ -35,7 +35,7 @@ import { fakeFetch, fakeSocket, jwt, tick, type FakeSocket, type Frame, type Sen
 const URL_ = 'https://abc123.api.snoutdata.com';
 
 function tokenBody(access: string, refresh: string) {
-	return { access_token: access, refresh_token: refresh, token_type: 'bearer', expires_in: 3600, user: { id: 'u1', aud: 'snout_member', profile_data: { name: 'Ana' }, server_data: { plan: 'pro' } } };
+	return { access_token: access, refresh_token: refresh, token_type: 'bearer', expires_in: 3600, user: { id: 'u1', aud: 'authenticated', user_metadata: { name: 'Ana' }, app_metadata: { plan: 'pro' } } };
 }
 
 function client(vocabulary?: Vocabulary, answer?: (request: Sent) => { status?: number; body?: unknown; headers?: Record<string, string> }) {
@@ -55,7 +55,7 @@ function path(request: Sent): string {
 
 test('every 0.3.x name is the same function (or object) as its new one', () => {
 	const { db } = client();
-	assert.equal(snout, snout);
+	assert.equal(createClient, snout);
 	assert.equal(rpc, procedure);
 	assert.equal(BucketClient, SpaceClient);
 	assert.equal(db.auth, db.identity);
@@ -79,19 +79,19 @@ test('every 0.3.x name is the same function (or object) as its new one', () => {
 		[TableBuilder.prototype, 'delete', 'remove'],
 		[QueryBuilder.prototype, 'select', 'read'],
 		[AuthClient.prototype, 'signUp', 'register'],
-		[AuthClient.prototype, 'passwordSignIn', 'passwordSignIn'],
-		[AuthClient.prototype, 'codeSignIn', 'codeSignIn'],
-		[AuthClient.prototype, 'providerSignIn', 'providerSignIn'],
-		[AuthClient.prototype, 'ssoSignIn', 'ssoSignIn'],
-		[AuthClient.prototype, 'guestSignIn', 'guestSignIn'],
-		[AuthClient.prototype, 'confirmCode', 'confirmCode'],
-		[AuthClient.prototype, 'finishProviderSignIn', 'finishProviderSignIn'],
+		[AuthClient.prototype, 'signInWithPassword', 'passwordSignIn'],
+		[AuthClient.prototype, 'signInWithOtp', 'codeSignIn'],
+		[AuthClient.prototype, 'signInWithOAuth', 'providerSignIn'],
+		[AuthClient.prototype, 'signInWithSSO', 'ssoSignIn'],
+		[AuthClient.prototype, 'signInAnonymously', 'guestSignIn'],
+		[AuthClient.prototype, 'verifyOtp', 'confirmCode'],
+		[AuthClient.prototype, 'exchangeCodeForSession', 'finishProviderSignIn'],
 		[AuthClient.prototype, 'signOut', 'signOff'],
 		[AuthClient.prototype, 'getSession', 'currentSession'],
 		[AuthClient.prototype, 'getUser', 'currentPerson'],
 		[AuthClient.prototype, 'refreshSession', 'renew'],
-		[AuthClient.prototype, 'onSessionChange', 'onSessionChange'],
-		[AuthClient.prototype, 'sendReset', 'sendReset'],
+		[AuthClient.prototype, 'onAuthStateChange', 'onSessionChange'],
+		[AuthClient.prototype, 'resetPasswordForEmail', 'sendReset'],
 		[AuthClient.prototype, 'updateUser', 'changePerson'],
 		[StorageClient.prototype, 'from', 'space'],
 		[StorageClient.prototype, 'listBuckets', 'listSpaces'],
@@ -102,8 +102,8 @@ test('every 0.3.x name is the same function (or object) as its new one', () => {
 		[StorageClient.prototype, 'deleteBucket', 'deleteSpace'],
 		[SpaceClient.prototype, 'upload', 'put'],
 		[SpaceClient.prototype, 'download', 'get'],
-		[SpaceClient.prototype, 'signedLink', 'signedLink'],
-		[SpaceClient.prototype, 'publicLink', 'publicLink'],
+		[SpaceClient.prototype, 'createSignedUrl', 'signedLink'],
+		[SpaceClient.prototype, 'getPublicUrl', 'publicLink'],
 		[FunctionsClient.prototype, 'invoke', 'call'],
 		[RealtimeClient.prototype, 'channel', 'topic'],
 		[RealtimeChannel.prototype, 'on', 'listen'],
@@ -147,13 +147,13 @@ test('by default the data API is /v1/data and the key goes in Snout-Key, never a
 	}
 });
 
-test('vocabulary: old speaks /v1/data and apikey, with the same calls', async () => {
+test('vocabulary: old speaks /rest/v1 and apikey, with the same calls', async () => {
 	const { db, sent } = client('old');
-	assert.equal(db.dataUrl, `${URL_}/v1/data`);
-	assert.equal(db.liveUrl, 'wss://abc123.api.snoutdata.com/v1/live');
+	assert.equal(db.dataUrl, `${URL_}/rest/v1`);
+	assert.equal(db.liveUrl, 'wss://abc123.api.snoutdata.com/realtime/v1');
 	await db.table('todos').read('id');
 	await db.from('todos').select('id');
-	assert.deepEqual(sent.map(path), ['/v1/data/todos?select=id', '/v1/data/todos?select=id']);
+	assert.deepEqual(sent.map(path), ['/rest/v1/todos?select=id', '/rest/v1/todos?select=id']);
 	assert.equal(sent[0].headers.apikey, 'app-key');
 	assert.equal(sent[0].headers['snout-key'], undefined);
 });
@@ -174,15 +174,15 @@ test('identity speaks the new routes, via= and profile_data; old speaks the old 
 			'POST /v1/identity/sign-off?scope=global'
 		],
 		old: [
-			'POST /v1/identity/register',
-			'POST /v1/identity/session?via=password',
-			'GET /v1/identity/person',
-			'PUT /v1/identity/person',
-			'POST /v1/identity/session?via=renew',
-			'POST /v1/identity/code',
+			'POST /auth/v1/signup',
+			'POST /auth/v1/token?grant_type=password',
+			'GET /auth/v1/user',
+			'PUT /auth/v1/user',
+			'POST /auth/v1/token?grant_type=refresh_token',
+			'POST /auth/v1/otp',
 			'POST /auth/v1/verify',
-			'POST /v1/identity/reset',
-			'POST /v1/identity/sign-off?scope=global'
+			'POST /auth/v1/recover',
+			'POST /auth/v1/logout?scope=global'
 		]
 	};
 	for (const vocabulary of ['new', 'old'] as const) {
@@ -209,34 +209,34 @@ test('identity speaks the new routes, via= and profile_data; old speaks the old 
 
 test('the 0.3.x option names are still read, and sent under the vocabulary\'s own name', async () => {
 	const { db, sent } = client('new', () => ({ body: { id: 'u1' } }));
-	await db.identity.register({ email: 'a@example.com', password: 'pw', options: { data: { name: 'Ana' } } });
+	await db.auth.signUp({ email: 'a@example.com', password: 'pw', options: { data: { name: 'Ana' } } });
 	assert.deepEqual(JSON.parse(sent[0].body ?? '{}').profile_data, { name: 'Ana' });
-	await db.identity.operator.createUser({ email: 'b@example.com', profile_data: { a: 1 }, server_data: { b: 2 } });
+	await db.auth.admin.createUser({ email: 'b@example.com', user_metadata: { a: 1 }, app_metadata: { b: 2 } });
 	const created = JSON.parse(sent[1].body ?? '{}') as Record<string, unknown>;
 	assert.equal(path(sent[1]), '/v1/identity/operator/people');
-	assert.deepEqual([created.profile_data, created.server_data, created.profile_data, created.server_data], [{ a: 1 }, { b: 2 }, undefined, undefined]);
+	assert.deepEqual([created.profile_data, created.server_data, created.user_metadata, created.app_metadata], [{ a: 1 }, { b: 2 }, undefined, undefined]);
 
 	const old = client('old', () => ({ body: { id: 'u1' } }));
 	await old.db.identity.operator.createUser({ email: 'b@example.com', profile_data: { a: 1 }, server_data: { b: 2 } });
 	const oldBody = JSON.parse(old.sent[0].body ?? '{}') as Record<string, unknown>;
-	assert.equal(path(old.sent[0]), '/v1/identity/operator/people');
-	assert.deepEqual([oldBody.profile_data, oldBody.server_data, oldBody.profile_data], [{ a: 1 }, { b: 2 }, undefined]);
+	assert.equal(path(old.sent[0]), '/auth/v1/admin/users');
+	assert.deepEqual([oldBody.user_metadata, oldBody.app_metadata, oldBody.profile_data], [{ a: 1 }, { b: 2 }, undefined]);
 });
 
 test('a session and a person carry both names, whichever the server sent', async () => {
 	const access = jwt({ sub: 'u1', exp: Math.floor(Date.now() / 1000) + 3600 });
-	// An old server: `user` and `profile_data` only.
+	// An old server: `user` and `user_metadata` only.
 	const { db } = client('old', () => ({ body: tokenBody(access, 'r1') }));
 	const { data } = await db.identity.passwordSignIn({ email: 'a@example.com', password: 'pw' });
 	assert.equal(data.person, data.user);
 	assert.equal(data.session?.person, data.session?.user);
 	assert.deepEqual(data.person?.profile_data, { name: 'Ana' });
-	assert.deepEqual(data.person?.profile_data, { name: 'Ana' });
+	assert.deepEqual(data.person?.user_metadata, { name: 'Ana' });
 	assert.deepEqual(data.person?.server_data, { plan: 'pro' });
 	// A new server: `person` and `profile_data` beside the old.
 	const fresh = client('new', () => ({ body: { id: 'u2', profile_data: { name: 'Bea' }, server_data: {} } }));
 	const person = (await fresh.db.identity.currentPerson(access)).data.person;
-	assert.deepEqual(person?.profile_data, { name: 'Bea' });
+	assert.deepEqual(person?.user_metadata, { name: 'Bea' });
 	assert.deepEqual(person?.profile_data, { name: 'Bea' });
 });
 
@@ -268,13 +268,13 @@ test('files speak /v1/files with space, file, image and signed; old speaks bucke
 			'DELETE /v1/files/file/papers'
 		],
 		old: [
-			'GET /v1/files/space',
-			'POST /v1/files/file/papers/a.pdf',
-			'GET /v1/files/file/papers/a.pdf',
-			'GET /v1/files/image/authenticated/papers/a.pdf?width=64',
-			'POST /v1/files/file/signed/papers/a.pdf',
-			'POST /v1/files/file/list/papers',
-			'DELETE /v1/files/file/papers'
+			'GET /storage/v1/bucket',
+			'POST /storage/v1/object/papers/a.pdf',
+			'GET /storage/v1/object/papers/a.pdf',
+			'GET /storage/v1/render/image/authenticated/papers/a.pdf?width=64',
+			'POST /storage/v1/object/sign/papers/a.pdf',
+			'POST /storage/v1/object/list/papers',
+			'DELETE /storage/v1/object/papers'
 		]
 	};
 	for (const vocabulary of ['new', 'old'] as const) {
@@ -288,7 +288,7 @@ test('files speak /v1/files with space, file, image and signed; old speaks bucke
 		await space.list();
 		await space.remove(['a.pdf']);
 		assert.deepEqual(sent.map((s) => `${s.method} ${path(s)}`), expected[vocabulary], vocabulary);
-		const prefix = vocabulary === 'new' ? '/v1/files' : '/v1/files';
+		const prefix = vocabulary === 'new' ? '/v1/files' : '/storage/v1';
 		assert.equal(signed.data?.signedUrl, `${URL_}${prefix}/object/sign/papers/a.pdf?token=t`);
 		const publicRoute = vocabulary === 'new' ? 'file/public' : 'object/public';
 		const imageRoute = vocabulary === 'new' ? 'image/public' : 'render/image/public';
@@ -297,12 +297,12 @@ test('files speak /v1/files with space, file, image and signed; old speaks bucke
 	}
 });
 
-test('fn.call reaches /v1/fn with Snout-Key; old reaches /v1/fn with apikey', async () => {
+test('fn.call reaches /v1/fn with Snout-Key; old reaches /functions/v1 with apikey', async () => {
 	for (const vocabulary of ['new', 'old'] as const) {
 		const { db, sent } = client(vocabulary, () => ({ body: { ok: true } }));
 		const { data } = await db.fn.call('echo', { body: { a: 1 } });
 		assert.deepEqual(data, { ok: true });
-		assert.equal(path(sent[0]), vocabulary === 'new' ? '/v1/fn/echo' : '/v1/fn/echo');
+		assert.equal(path(sent[0]), vocabulary === 'new' ? '/v1/fn/echo' : '/functions/v1/echo');
 		assert.equal(sent[0].headers[vocabulary === 'new' ? 'snout-key' : 'apikey'], 'app-key');
 	}
 });
@@ -402,9 +402,9 @@ test('a signal on a topic that is not joined goes to /v1/live/signal', async () 
 test('0.3.x live code (channel, on, subscribe, send) runs unchanged over the new wire', async () => {
 	const { transport, sockets } = liveServer();
 	const { fetch } = fakeFetch();
-	const db = snout(URL_, 'app-key', { global: { fetch }, auth: { persistSession: false, autoRefreshToken: false }, realtime: { transport, timeoutMs: 200 } });
+	const db = createClient(URL_, 'app-key', { global: { fetch }, auth: { persistSession: false, autoRefreshToken: false }, realtime: { transport, timeoutMs: 200 } });
 	const heard: unknown[] = [];
-	const channel = db.channel('room:1', { config: { broadcast: { self: true } } }).listen('signal', { event: 'ping' }, (m) => heard.push(m.payload));
+	const channel = db.channel('room:1', { config: { broadcast: { self: true } } }).on('broadcast', { event: 'ping' }, (m) => heard.push(m.payload));
 	const status = await new Promise<SubscribeStatus>((resolve) => channel.subscribe((s) => resolve(s)));
 	assert.equal(status, 'SUBSCRIBED');
 	assert.equal(await channel.send({ type: 'broadcast', event: 'ping', payload: { n: 2 } }), 'ok');

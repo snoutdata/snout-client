@@ -6,14 +6,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { snout, deliveryIdOf, webNotification } from './index.js';
+import { createClient, deliveryIdOf, webNotification } from './index.js';
 import { fakeFetch, type Sent } from './testing.js';
 
 const URL_ = 'https://abc123.api.snoutdata.com';
 
 function client(answer: (request: Sent) => { status?: number; body?: unknown; headers?: Record<string, string> }) {
 	const { fetch, sent } = fakeFetch(answer);
-	const db = snout(URL_, 'app-key', { vocabulary: 'old', global: { fetch }, auth: { persistSession: false, autoRefreshToken: false } });
+	const db = createClient(URL_, 'anon-key', { vocabulary: 'old', global: { fetch }, auth: { persistSession: false, autoRefreshToken: false } });
 	return { db, sent };
 }
 
@@ -24,7 +24,7 @@ test('register posts the installation to /push/v1/devices with the key', async (
 	assert.deepEqual(data, { id: 'd1' });
 	assert.equal(new URL(sent[0].url).pathname, '/push/v1/devices');
 	assert.equal(sent[0].method, 'POST');
-	assert.equal(sent[0].headers.apikey, 'app-key');
+	assert.equal(sent[0].headers.apikey, 'anon-key');
 	assert.deepEqual(JSON.parse(String(sent[0].body)), { transport: 'apns', token: 'a1b2', environment: 'sandbox' });
 });
 

@@ -6,25 +6,25 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { snout } from './index.js';
+import { createClient } from './index.js';
 import { fakeFetch } from './testing.js';
 
 const URL_ = 'https://abc123.api.snoutdata.com';
 
 function client(answer?: Parameters<typeof fakeFetch>[0]) {
 	const { fetch, sent } = fakeFetch(answer);
-	const db = snout(URL_, 'app-key', { vocabulary: 'old', global: { fetch }, auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
+	const db = createClient(URL_, 'anon-key', { vocabulary: 'old', global: { fetch }, auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
 	return { db, sent };
 }
 
 test('the five prefixes come from one URL', () => {
 	const { db } = client();
-	assert.equal(db.restUrl, `${URL_}/v1/data`);
-	assert.equal(db.rest.url, `${URL_}/v1/data`);
-	assert.equal(db.authUrl, `${URL_}/v1/identity`);
-	assert.equal(db.storageUrl, `${URL_}/v1/files`);
-	assert.equal(db.functionsUrl, `${URL_}/v1/fn`);
-	assert.equal(db.realtimeUrl, 'wss://abc123.api.snoutdata.com/v1/live');
+	assert.equal(db.restUrl, `${URL_}/rest/v1`);
+	assert.equal(db.rest.url, `${URL_}/rest/v1`);
+	assert.equal(db.authUrl, `${URL_}/auth/v1`);
+	assert.equal(db.storageUrl, `${URL_}/storage/v1`);
+	assert.equal(db.functionsUrl, `${URL_}/functions/v1`);
+	assert.equal(db.realtimeUrl, 'wss://abc123.api.snoutdata.com/realtime/v1');
 });
 
 test('a select sends the key twice and the filters in PostgREST syntax', async () => {
@@ -39,14 +39,14 @@ test('a select sends the key twice and the filters in PostgREST syntax', async (
 	assert.equal(error, null);
 	assert.deepEqual(data, [{ id: 1 }]);
 	const url = new URL(sent[0].url);
-	assert.equal(url.pathname, '/v1/data/todos');
+	assert.equal(url.pathname, '/rest/v1/todos');
 	assert.equal(url.searchParams.get('select'), 'id,note');
 	assert.equal(url.searchParams.get('done'), 'eq.false');
 	assert.equal(url.searchParams.get('tag'), 'in.(a,"b,c")');
 	assert.equal(url.searchParams.get('order'), 'id.desc');
 	assert.equal(url.searchParams.get('limit'), '5');
-	assert.equal(sent[0].headers.apikey, 'app-key');
-	assert.equal(sent[0].headers.authorization, 'Bearer app-key');
+	assert.equal(sent[0].headers.apikey, 'anon-key');
+	assert.equal(sent[0].headers.authorization, 'Bearer anon-key');
 });
 
 test('nothing is sent until the builder is awaited', async () => {
@@ -118,7 +118,7 @@ test('rpc posts its arguments, or puts them in the URL for get', async () => {
 	const { db, sent } = client(() => ({ body: 3 }));
 	const { data } = await db.rpc('add', { a: 1, b: 2 });
 	assert.equal(data, 3);
-	assert.equal(new URL(sent[0].url).pathname, '/v1/data/rpc/add');
+	assert.equal(new URL(sent[0].url).pathname, '/rest/v1/rpc/add');
 	assert.equal(sent[0].body, '{"a":1,"b":2}');
 	await db.rpc('add', { a: 1 }, { get: true });
 	assert.equal(new URL(sent[1].url).searchParams.get('a'), '1');
@@ -147,7 +147,7 @@ test('untyped rows are any, and insert().select() returns rows, not null', async
 	interface Db {
 		public: { Tables: { people: { Row: { id: number; name: string } } } };
 	}
-	const typed = snout<Db>(URL_, 'app-key', { global: { fetch: fakeFetch(() => ({ body: { id: 7, name: 'ada' } })).fetch }, auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
+	const typed = createClient<Db>(URL_, 'anon-key', { global: { fetch: fakeFetch(() => ({ body: { id: 7, name: 'ada' } })).fetch }, auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
 	const { data } = await typed.from('people').insert({ name: 'ada' }).select().single();
 	const id: number | undefined = data?.id;
 	assert.equal(id, 7);

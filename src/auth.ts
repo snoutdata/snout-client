@@ -6,7 +6,7 @@
 /**
  * Identity: people, sessions and the token every other product sends.
  *
- * The identity server is at `/v1/identity` (`/v1/identity` in the old vocabulary). A session is an
+ * The identity server is at `/v1/identity` (`/auth/v1` in the old vocabulary). A session is an
  * access token (a short-lived JWT that row-level security reads) plus a refresh token that buys
  * the next one. This module keeps the session, stores it where the caller said to (the browser's
  * localStorage by default), renews it before it expires, and tells every listener when it
@@ -15,7 +15,7 @@
  * The routes and fields it sends are the vocabulary's own (`/session?via=password` and
  * `profile_data`, or `/token?grant_type=password` and `data`); a person and a session it hands
  * back carry BOTH names for each renamed field (`person` and `user`, `profile_data` and
- * `profile_data`, `server_data` and `server_data`), whichever the server sent, so code written
+ * `user_metadata`, `server_data` and `app_metadata`), whichever the server sent, so code written
  * against either reads them.
  */
 
@@ -37,9 +37,9 @@ export interface Person {
 	/** What only the server key may set (`operator.createUser({ server_data })`). */
 	server_data: Record<string, unknown>;
 	/** @deprecated Since 0.4.0: `server_data`, the same value. */
-	server_data: Record<string, unknown>;
+	app_metadata: Record<string, unknown>;
 	/** @deprecated Since 0.4.0: `profile_data`, the same value. */
-	profile_data: Record<string, unknown>;
+	user_metadata: Record<string, unknown>;
 	identities?: Record<string, unknown>[];
 	created_at: string;
 	updated_at?: string;
@@ -152,9 +152,9 @@ const VIA: Record<string, string> = { refresh_token: 'renew' };
  */
 export function toPerson(body: unknown): Person {
 	const raw = (body !== null && typeof body === 'object' ? body : {}) as Record<string, unknown>;
-	const profile = (raw.profile_data ?? raw.profile_data ?? {}) as Record<string, unknown>;
-	const server = (raw.server_data ?? raw.server_data ?? {}) as Record<string, unknown>;
-	return { ...raw, profile_data: profile, profile_data: profile, server_data: server, server_data: server } as Person;
+	const profile = (raw.profile_data ?? raw.user_metadata ?? {}) as Record<string, unknown>;
+	const server = (raw.server_data ?? raw.app_metadata ?? {}) as Record<string, unknown>;
+	return { ...raw, profile_data: profile, user_metadata: profile, server_data: server, app_metadata: server } as Person;
 }
 
 /** A session with its person under both names, from one that may carry either (0.3.x stored only `user`). */
@@ -275,19 +275,19 @@ export class AuthClient {
 	/** @deprecated Since 0.4.0: use `register()`, the same function. Removed in 0.5.0. */
 	declare signUp: AuthClient['register'];
 	/** @deprecated Since 0.4.0: use `passwordSignIn()`, the same function. Removed in 0.5.0. */
-	declare passwordSignIn: AuthClient['passwordSignIn'];
+	declare signInWithPassword: AuthClient['passwordSignIn'];
 	/** @deprecated Since 0.4.0: use `codeSignIn()`, the same function. Removed in 0.5.0. */
-	declare codeSignIn: AuthClient['codeSignIn'];
+	declare signInWithOtp: AuthClient['codeSignIn'];
 	/** @deprecated Since 0.4.0: use `providerSignIn()`, the same function. Removed in 0.5.0. */
-	declare providerSignIn: AuthClient['providerSignIn'];
+	declare signInWithOAuth: AuthClient['providerSignIn'];
 	/** @deprecated Since 0.4.0: use `ssoSignIn()`, the same function. Removed in 0.5.0. */
-	declare ssoSignIn: AuthClient['ssoSignIn'];
+	declare signInWithSSO: AuthClient['ssoSignIn'];
 	/** @deprecated Since 0.4.0: use `guestSignIn()`, the same function. Removed in 0.5.0. */
-	declare guestSignIn: AuthClient['guestSignIn'];
+	declare signInAnonymously: AuthClient['guestSignIn'];
 	/** @deprecated Since 0.4.0: use `confirmCode()`, the same function. Removed in 0.5.0. */
-	declare confirmCode: AuthClient['confirmCode'];
+	declare verifyOtp: AuthClient['confirmCode'];
 	/** @deprecated Since 0.4.0: use `finishProviderSignIn()`, the same function. Removed in 0.5.0. */
-	declare finishProviderSignIn: AuthClient['finishProviderSignIn'];
+	declare exchangeCodeForSession: AuthClient['finishProviderSignIn'];
 	/** @deprecated Since 0.4.0: use `signOff()`, the same function. Removed in 0.5.0. */
 	declare signOut: AuthClient['signOff'];
 	/** @deprecated Since 0.4.0: use `currentSession()`, the same function. Removed in 0.5.0. */
@@ -297,9 +297,9 @@ export class AuthClient {
 	/** @deprecated Since 0.4.0: use `renew()`, the same function. Removed in 0.5.0. */
 	declare refreshSession: AuthClient['renew'];
 	/** @deprecated Since 0.4.0: use `onSessionChange()`, the same function. Removed in 0.5.0. */
-	declare onSessionChange: AuthClient['onSessionChange'];
+	declare onAuthStateChange: AuthClient['onSessionChange'];
 	/** @deprecated Since 0.4.0: use `sendReset()`, the same function. Removed in 0.5.0. */
-	declare sendReset: AuthClient['sendReset'];
+	declare resetPasswordForEmail: AuthClient['sendReset'];
 	/** @deprecated Since 0.4.0: use `changePerson()`, the same function. Removed in 0.5.0. */
 	declare updateUser: AuthClient['changePerson'];
 
@@ -338,17 +338,17 @@ export class AuthClient {
 
 	/**
 	 * @internal A person's data fields under this vocabulary's names: `profile_data` and
-	 * `server_data`, or the old `oldProfile` (`data` or `profile_data`) and `server_data`.
+	 * `server_data`, or the old `oldProfile` (`data` or `user_metadata`) and `app_metadata`.
 	 * Absent ones are left out.
 	 */
-	fields(oldProfile: 'data' | 'profile_data', profile: unknown, server?: unknown): Record<string, unknown> {
+	fields(oldProfile: 'data' | 'user_metadata', profile: unknown, server?: unknown): Record<string, unknown> {
 		const old = this.vocabulary === 'old';
 		const out: Record<string, unknown> = {};
 		if (profile !== undefined) {
 			out[old ? oldProfile : 'profile_data'] = profile;
 		}
 		if (server !== undefined) {
-			out[old ? 'server_data' : 'server_data'] = server;
+			out[old ? 'app_metadata' : 'server_data'] = server;
 		}
 		return out;
 	}
@@ -987,7 +987,7 @@ export class AuthAdmin {
 
 	/**
 	 * A new account. `profile_data` is the person's own data, `server_data` what only the server
-	 * key sets (`profile_data` and `server_data` before 0.4.0).
+	 * key sets (`user_metadata` and `app_metadata` before 0.4.0).
 	 */
 	async createUser(attributes: {
 		email?: string;
@@ -998,9 +998,9 @@ export class AuthAdmin {
 		profile_data?: Record<string, unknown>;
 		server_data?: Record<string, unknown>;
 		/** @deprecated Since 0.4.0: `profile_data`. */
-		profile_data?: Record<string, unknown>;
+		user_metadata?: Record<string, unknown>;
 		/** @deprecated Since 0.4.0: `server_data`. */
-		server_data?: Record<string, unknown>;
+		app_metadata?: Record<string, unknown>;
 		ban_duration?: string;
 	}): Promise<AuthResult<PersonData>> {
 		const { body, error } = await this.auth.call(this.auth.route('people'), { body: this.speak(attributes) });
@@ -1085,25 +1085,25 @@ export class AuthAdmin {
 
 	/** Attributes with the person's data fields under the vocabulary's names, the new one winning when both are given. */
 	private speak(attributes: Record<string, unknown>): Record<string, unknown> {
-		const { profile_data, server_data, profile_data, server_data, ...rest } = attributes;
-		return { ...rest, ...this.auth.fields('profile_data', profile_data ?? profile_data, server_data ?? server_data) };
+		const { profile_data, server_data, user_metadata, app_metadata, ...rest } = attributes;
+		return { ...rest, ...this.auth.fields('user_metadata', profile_data ?? user_metadata, server_data ?? app_metadata) };
 	}
 }
 
 // The 0.3.x names, each the same function as its new one, kept for 0.4.x.
 
 AuthClient.prototype.signUp = AuthClient.prototype.register;
-AuthClient.prototype.passwordSignIn = AuthClient.prototype.passwordSignIn;
-AuthClient.prototype.codeSignIn = AuthClient.prototype.codeSignIn;
-AuthClient.prototype.providerSignIn = AuthClient.prototype.providerSignIn;
-AuthClient.prototype.ssoSignIn = AuthClient.prototype.ssoSignIn;
-AuthClient.prototype.guestSignIn = AuthClient.prototype.guestSignIn;
-AuthClient.prototype.confirmCode = AuthClient.prototype.confirmCode;
-AuthClient.prototype.finishProviderSignIn = AuthClient.prototype.finishProviderSignIn;
+AuthClient.prototype.signInWithPassword = AuthClient.prototype.passwordSignIn;
+AuthClient.prototype.signInWithOtp = AuthClient.prototype.codeSignIn;
+AuthClient.prototype.signInWithOAuth = AuthClient.prototype.providerSignIn;
+AuthClient.prototype.signInWithSSO = AuthClient.prototype.ssoSignIn;
+AuthClient.prototype.signInAnonymously = AuthClient.prototype.guestSignIn;
+AuthClient.prototype.verifyOtp = AuthClient.prototype.confirmCode;
+AuthClient.prototype.exchangeCodeForSession = AuthClient.prototype.finishProviderSignIn;
 AuthClient.prototype.signOut = AuthClient.prototype.signOff;
 AuthClient.prototype.getSession = AuthClient.prototype.currentSession;
 AuthClient.prototype.getUser = AuthClient.prototype.currentPerson;
 AuthClient.prototype.refreshSession = AuthClient.prototype.renew;
-AuthClient.prototype.onSessionChange = AuthClient.prototype.onSessionChange;
-AuthClient.prototype.sendReset = AuthClient.prototype.sendReset;
+AuthClient.prototype.onAuthStateChange = AuthClient.prototype.onSessionChange;
+AuthClient.prototype.resetPasswordForEmail = AuthClient.prototype.sendReset;
 AuthClient.prototype.updateUser = AuthClient.prototype.changePerson;
