@@ -45,7 +45,7 @@ to an exact version:
 
 ```html
 <script type="module">
-  import { snout } from 'https://cdn.jsdelivr.net/npm/@snoutdata/client@0.4.1/dist/index.js'
+  import { snout } from 'https://cdn.jsdelivr.net/npm/@snoutdata/client@0.5.0/dist/index.js'
 </script>
 ```
 
